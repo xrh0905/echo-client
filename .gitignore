@@ -4,6 +4,7 @@
 # python cache
 __pycache__
 *.pyc
+config.yaml
 
 # poetry build
 dist/
