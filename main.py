@@ -16,28 +16,7 @@ from rich.console import Console
 from config import load_config, save_config
 from message import get_delay, parse_message, render
 
-HandshakePayload = {
-    "action": "message_data",
-    "data": {
-        "username": "系统",
-        "messages": [
-            {
-                "message": [
-                    {
-                        "message": [
-                            {
-                                "text": "websocket服务器，",
-                                "pause": 15,
-                                "typewrite": "websocketfu'wu'qi",
-                            },
-                            {"text": "连接成功！", "event": "shout"},
-                        ]
-                    }
-                ]
-            }
-        ],
-    },
-}
+PING_PAYLOAD = json.dumps({"action": "ping", "data": {}}, ensure_ascii=False)
 
 
 class EchoServer:
@@ -51,6 +30,8 @@ class EchoServer:
         self._server: Optional[Any] = None
         self._input_session: Optional[PromptSession] = None
         self._command_handlers = self._build_command_handlers()
+        self._heartbeat_counts: Dict[int, int] = {}
+        self._client_names: Dict[int, str] = {}
 
     def _build_command_handlers(self) -> Dict[str, Callable[[List[str]], bool]]:
         return {
@@ -61,6 +42,9 @@ class EchoServer:
             "q": self._cmd_quit,
             "source": self._cmd_source,
             "s": self._cmd_source,
+            "printspeed": self._cmd_set_print_speed,
+            "speed": self._cmd_set_print_speed,
+            "ps": self._cmd_set_print_speed,
             "toggle-typewriting": self._cmd_toggle_typewriting,
             "tt": self._cmd_toggle_typewriting,
             "toggle-autopause": self._cmd_toggle_autopause,
@@ -97,19 +81,34 @@ class EchoServer:
     async def _handle_client(self, websocket: Any) -> None:
         client_id = next(self._client_ids)
         self.console.print(f"客户端{client_id}: 已建立连接")
+        self._heartbeat_counts[client_id] = 0
+        self._client_names[client_id] = f"客户端{client_id}"
 
         listener = asyncio.create_task(self._pump_events(websocket, client_id))
         receiver = asyncio.create_task(self._receive_messages(websocket, client_id))
 
+        disconnect_reason: Optional[str] = None
+
         try:
+            await websocket.send(PING_PAYLOAD)
             await asyncio.gather(listener, receiver)
-        except websockets.exceptions.ConnectionClosed:
-            self.console.print(f"客户端{client_id}: 连接已断开")
+        except websockets.exceptions.ConnectionClosed as exc:
+            disconnect_reason = f"代码 {exc.code}" if hasattr(exc, "code") else "异常关闭"
         finally:
             for task in (listener, receiver):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            heartbeat_count = self._heartbeat_counts.pop(client_id, 0)
+            client_name = self._client_names.pop(client_id, None)
+            summary = f"客户端{client_id}: 连接已断开（收到心跳 {heartbeat_count} 次）"
+            if client_name and client_name != f"客户端{client_id}":
+                summary = (
+                    f"客户端{client_id}({client_name}): 连接已断开（收到心跳 {heartbeat_count} 次）"
+                )
+            if disconnect_reason:
+                summary += f"，原因: {disconnect_reason}"
+            self.console.print(summary)
 
     async def _receive_messages(self, websocket: Any, client_id: int) -> None:
         async for message in websocket:
@@ -121,10 +120,15 @@ class EchoServer:
 
             action = data.get("action")
             payload = data.get("data", {})
+            origin = data.get("from", {})
 
             if action == "hello":
-                self.console.print(f"客户端{client_id}: 上线")
-                await websocket.send(json.dumps(HandshakePayload, ensure_ascii=False))
+                client_name = origin.get("name") or origin.get("uuid")
+                if client_name:
+                    self._client_names[client_id] = client_name
+                    self.console.print(f"客户端{client_id}({client_name}): 上线")
+                else:
+                    self.console.print(f"客户端{client_id}: 上线")
             elif action == "close":
                 self.console.print(f"客户端{client_id}: 发出下线请求")
             elif action == "page_hidden":
@@ -134,10 +138,14 @@ class EchoServer:
             elif action == "echo_printing":
                 username = payload.get("username", "?")
                 content = payload.get("message", "") or "(空)"
+                if content == "undefined":
+                    continue
                 self.console.print(f"客户端{client_id}: 正在打印 {username}: {content}")
             elif action == "echo_state_update":
                 state = payload.get("state", "unknown")
                 remaining = payload.get("messagesCount")
+                if state == "ready" and remaining in (0, None):
+                    continue
                 remaining_str = "未知" if remaining is None else str(remaining)
                 self.console.print(f"客户端{client_id}: 状态更新 -> {state}, 剩余消息 {remaining_str}")
             elif action == "error":
@@ -146,7 +154,8 @@ class EchoServer:
                 extra_text = f"，详情: {extras}" if extras else ""
                 self.console.print(f"[red]客户端{client_id}: 报告错误 {name}{extra_text}[/red]")
             elif action == "websocket_heartbeat":
-                self.console.print(f"客户端{client_id}: 心跳包")
+                self._heartbeat_counts[client_id] = self._heartbeat_counts.get(client_id, 0) + 1
+                continue
             else:
                 self.console.print(f"客户端{client_id}: 发送了未知事件，事件原文: {data}")
 
@@ -240,6 +249,25 @@ class EchoServer:
         self._execute_source_file(args[0])
         return True
 
+    def _cmd_set_print_speed(self, args: List[str]) -> bool:
+        if len(args) != 1:
+            self.console.print("[red]命令接受一个参数，不多不少。[/red]")
+            return True
+        try:
+            value = int(args[0])
+        except ValueError:
+            self.console.print("[red]打印速度需要输入正整数，单位毫秒。[/red]")
+            return True
+
+        if value <= 0:
+            self.console.print("[red]打印速度需要输入正整数，单位毫秒。[/red]")
+            return True
+
+        self.config["print_speed"] = value
+        self._persist_config()
+        self.console.print(f"[green]打印速度已设置为 {value}ms[/green]")
+        return True
+
     def _cmd_toggle_typewriting(self, args: List[str]) -> bool:
         if args:
             self.console.print("[yellow]提示：此命令不接受额外参数，参数已忽略。[/yellow]")
@@ -321,7 +349,7 @@ class EchoServer:
             self.console.print(f"[red]{exc} 行内命令不存在！[/red]")
             return
         payload = render(self.config, syntax)
-        delay = get_delay(syntax)
+        delay = get_delay(self.config, syntax)
         self._events.append({"action": "message_data", "data": payload, "delay": delay})
 
 
