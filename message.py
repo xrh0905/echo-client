@@ -3,78 +3,17 @@ from __future__ import annotations
 
 import json
 import string
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 import jieba
 from markdown_it import MarkdownIt
 from pypinyin import lazy_pinyin
 
-CHAR_PREFIX = "/"
 ALPHABETIC = set(string.ascii_letters)
 DEFAULT_PRINT_SPEED = 30
 SIZE_STEPS = ["extra-small", "small", "middle", "large", "extra-large"]
 SIZE_DEFAULT_INDEX = SIZE_STEPS.index("middle")
-
-SYM_IMMEDIATE = 1
-SYM_DEFERRED = 2
-
-COMMAND_TREE: Dict[str, Any] = {
-    "b": SYM_DEFERRED,
-    "d": SYM_IMMEDIATE,
-    "r": SYM_DEFERRED,
-    "p": SYM_DEFERRED,
-    "s": {"h": SYM_IMMEDIATE},
-    "c": {"r": SYM_DEFERRED, "b": SYM_DEFERRED},
-}
-
-COMMAND_ARGUMENTS: Dict[str, List[str]] = {
-    "d": ["int"],
-    "p": ["int"],
-}
-
-
 _MARKDOWN = MarkdownIt("commonmark")
-
-
-def _command_node_for(pointer: Dict[str, Any], char: str) -> Any:
-    if char not in pointer:
-        raise ValueError(f"未知命令: /{char}")
-    return pointer[char]
-
-
-def _node_is_terminal(value: Any) -> bool:
-    return isinstance(value, int)
-
-
-def _command_starts_at(text: str, start: int) -> bool:
-    pointer: Dict[str, Any] = COMMAND_TREE
-    index = start
-    while index < len(text):
-        char = text[index]
-        if char not in pointer:
-            return False
-        pointer = pointer[char]
-        index += 1
-        if _node_is_terminal(pointer):
-            return True
-    return False
-
-
-def _consume_int_argument(message: str, index: int) -> Tuple[int, int]:
-    if index >= len(message) or not message[index].isdigit():
-        raise ValueError("命令需要一个数值参数")
-
-    digits = []
-    while index < len(message) and message[index].isdigit():
-        digits.append(message[index])
-        index += 1
-
-    value = int("".join(digits))
-
-    if index < len(message) and message[index] == "/":
-        if not _command_starts_at(message, index + 1):
-            index += 1
-    return value, index
 
 
 def get_typewriting_string(text: str) -> str:
@@ -384,78 +323,72 @@ def _apply_markdown(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def parse_message(message: str) -> List[Dict[str, Any]]:
-    """Parse the inline command syntax into a structured representation."""
-    style: Dict[str, Any] = {}
-    start_params: Dict[str, Any] = {}
-    results: List[Dict[str, Any]] = []
-    buffer: List[str] = []
-    index = 0
+    """Convert plain text into the structured message representation."""
+    if not message:
+        return []
 
-    def emit_buffer() -> None:
-        if not buffer:
-            return
-        text_payload = "".join(buffer)
-        for segment in _apply_fast_formatting(text_payload, style):
-            entry = dict(segment)
-            if start_params:
-                entry["data"] = start_params.copy()
-            results.append(entry)
-        buffer.clear()
+    base_style: Dict[str, Any] = {}
+    segments: List[Dict[str, Any]] = []
+    for segment in _apply_fast_formatting(message, base_style):
+        segments.append(dict(segment))
 
-    while index < len(message):
-        char = message[index]
-        if char != CHAR_PREFIX:
-            buffer.append(char)
-            index += 1
+    return _apply_markdown(segments)
+
+
+def apply_autopause(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Inject pause markers according to the autopause configuration."""
+
+    result: List[Dict[str, Any]] = []
+
+    if not config.get("autopause"):
+        return [_clone_entry(entry) for entry in messages]
+
+    autopause_chars = str(config.get("autopausestr", ""))
+
+    try:
+        pause_duration = int(config.get("autopausetime", 0))
+    except (TypeError, ValueError):
+        pause_duration = 0
+
+    if pause_duration <= 0:
+        return [_clone_entry(entry) for entry in messages]
+
+    for entry in messages:
+        text = entry.get("text")
+        if not isinstance(text, str) or text == "":
+            result.append(_clone_entry(entry))
             continue
 
-        index += 1
-        pointer: Dict[str, Any] = COMMAND_TREE
-        command = []
+        buffer: List[str] = []
+        length = len(text)
 
-        while True:
-            if index >= len(message):
-                raise ValueError("末尾的命令没有完全匹配！")
-            node_char = message[index]
-            pointer = _command_node_for(pointer, node_char)
-            command.append(node_char)
-            index += 1
-            if _node_is_terminal(pointer):
-                break
+        def flush_buffer() -> None:
+            if not buffer:
+                return
+            chunk = "".join(buffer)
+            new_entry = _clone_entry(entry)
+            new_entry["text"] = chunk
+            result.append(new_entry)
+            buffer.clear()
 
-        command_str = "".join(command)
-        args: List[Any] = []
-        for arg_type in COMMAND_ARGUMENTS.get(command_str, []):
-            if arg_type != "int":
-                raise ValueError(f"未实现的参数类型: {arg_type}")
-            value, index = _consume_int_argument(message, index)
-            args.append(value)
+        for index, char in enumerate(text):
+            buffer.append(char)
+            next_char = text[index + 1] if index + 1 < length else None
+            should_pause = (
+                autopause_chars
+                and char in autopause_chars
+                and (next_char is None or next_char not in autopause_chars)
+            )
+            if should_pause:
+                flush_buffer()
+                result.append({"text": "", "pause": pause_duration})
 
-        if command_str == "sh":
-            results.append({"text": "", "event": "shout"})
-        emit_buffer()
+        flush_buffer()
 
-        if command_str == "r":
-            style.clear()
-        elif command_str == "d":
-            pause_duration = int(args[0]) if args else 0
-            results.append({"text": "", "pause": pause_duration})
-        elif command_str == "cr":
-            style["color"] = "#ff0000"
-        elif command_str == "cb":
-            style["color"] = "#66ccff"
-        elif command_str == "b":
-            style.clear()
-            style["bold"] = True
-        elif command_str == "p":
-            speed_value = int(args[0]) if args else 0
-            if speed_value <= 0:
-                start_params.pop("printSpeed", None)
-            else:
-                start_params["printSpeed"] = speed_value
+    if pause_duration > 0:
+        result.append({"text": "", "pause": pause_duration})
 
-    emit_buffer()
-    return _apply_markdown(results)
+    return result
 
 
 def get_delay(config: Dict[str, Any], messages: Iterable[Dict[str, Any]]) -> int:
@@ -518,6 +451,7 @@ def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
 
 
 __all__ = [
+    "apply_autopause",
     "get_delay",
     "get_typewriting_string",
     "parse_message",

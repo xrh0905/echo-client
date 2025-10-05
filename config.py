@@ -16,14 +16,14 @@ CONFIG_FILENAME = "config.yaml"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "command_prefix": "/",
-    "username": "/",
+    "username": "Someone",
     "host": "127.0.0.1",
     "port": 3000,
     "typewriting": True,
     "autopause": False,
     "autopausestr": ",，.。;；:：!！",
-    "autopausetime": 20,
-    "print_speed": 30,
+    "autopausetime": 10,
+    "print_speed": 10,
 }
 
 

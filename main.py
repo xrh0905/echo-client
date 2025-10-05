@@ -16,7 +16,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 
 from config import load_config, save_config
-from message import get_delay, parse_message, render
+from message import apply_autopause, get_delay, parse_message, render
 
 PING_PAYLOAD = json.dumps({"action": "ping", "data": {}}, ensure_ascii=False)
 
@@ -299,15 +299,13 @@ class EchoServer:
 
         literal = self._literal_message_from_command(command, prefix)
         if literal is not None:
-            processed = self._apply_autopause(literal)
-            self.console.print(f"发送文字消息: {processed}")
-            self._enqueue_message(processed)
+            self.console.print(f"发送文字消息: {literal}")
+            self._enqueue_message(literal)
             return True
 
         if not command.startswith(prefix):
-            processed = self._apply_autopause(command)
-            self.console.print(f"发送文字消息: {processed}")
-            self._enqueue_message(processed)
+            self.console.print(f"发送文字消息: {command}")
+            self._enqueue_message(command)
             return True
 
         parts = command.split()
@@ -422,29 +420,9 @@ class EchoServer:
         except FileNotFoundError:
             self.console.print("[red]这个文件怕是不存在吧！已终止后续的解析！[/]")
 
-    def _apply_autopause(self, text: str) -> str:
-        if not self.config.get("autopause", False):
-            return text
-        delay_str = f"/d{self.config['autopausetime']}"
-        result = []
-        for index, char in enumerate(text):
-            result.append(char)
-            if (
-                char in self.config.get("autopausestr", "")
-                and index != len(text) - 1
-                and text[index + 1] not in self.config.get("autopausestr", "")
-            ):
-                result.append(delay_str)
-        if not text.endswith(delay_str):
-            result.append(delay_str)
-        return "".join(result)
-
     def _enqueue_message(self, text: str) -> None:
-        try:
-            syntax = parse_message(text)
-        except ValueError as exc:
-            self.console.print(f"[red]{exc} 行内命令不存在！[/red]")
-            return
+        syntax = parse_message(text)
+        syntax = apply_autopause(self.config, syntax)
         payload = render(self.config, syntax)
         delay = get_delay(self.config, syntax)
         self._events.append({"action": "message_data", "data": payload, "delay": delay})
