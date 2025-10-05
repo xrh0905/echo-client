@@ -90,11 +90,17 @@ tips: 如果没有看到成功的连接请求，可以尝试刷新一下客户�
         pip install pyinstaller
         ```
 
-3. 在项目根目录执行：
+3. 在项目根目录执行（生成单文件 exe）：
 
         ```powershell
-        pyinstaller build.spec
+        pyinstaller --onefile --name echo-client build.spec
         ```
 
-打包完成后，可执行文件位于 `dist/echo-client/echo-client.exe`。配置文件 `config.yaml` 会自动复制到输出目录下，首次运行时会在该目录自动生成/更新。挂起的 `config.yaml` 允许在分发后的文件夹内直接调整运行参数。
+        或者使用自动生成的 `echo-client.spec`：
+
+        ```powershell
+        pyinstaller echo-client.spec
+        ```
+
+打包完成后，单文件位于 `dist/echo-client.exe`。运行后将在可执行文件所在目录自动创建或更新 `config.yaml`，无需随包分发。
 
