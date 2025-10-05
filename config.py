@@ -23,7 +23,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "autopause": False,
     "autopausestr": ",，.。;；:：!！",
     "autopausetime": 20,
-    "print_speed": 90,
+    "print_speed": 30,
 }
 
 

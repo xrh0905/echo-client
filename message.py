@@ -11,7 +11,7 @@ from pypinyin import lazy_pinyin
 
 CHAR_PREFIX = "/"
 ALPHABETIC = set(string.ascii_letters)
-DEFAULT_PRINT_SPEED = 120
+DEFAULT_PRINT_SPEED = 30
 SIZE_STEPS = ["extra-small", "small", "middle", "large", "extra-large"]
 SIZE_DEFAULT_INDEX = SIZE_STEPS.index("middle")
 
