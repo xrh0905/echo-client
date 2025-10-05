@@ -6,6 +6,7 @@ making the deployment self-contained and portable.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any, Dict, Optional
 
 import yaml
@@ -22,13 +23,27 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "autopause": False,
     "autopausestr": ",，.。;；:：!！",
     "autopausetime": 20,
-    "print_speed": 60,
+    "print_speed": 90,
 }
+
+
+def _base_directory() -> Path:
+    """Resolve the directory that should contain runtime configuration."""
+    if getattr(sys, "frozen", False):
+        # Running inside a bundled executable (e.g. PyInstaller)
+        return Path(sys.executable).resolve().parent
+    argv0 = Path(sys.argv[0]) if sys.argv and sys.argv[0] else None
+    if argv0:
+        try:
+            return argv0.resolve().parent
+        except OSError:
+            pass
+    return Path(__file__).resolve().parent
 
 
 def _config_path() -> Path:
     """Return the absolute path to the configuration file."""
-    base_dir = Path(__file__).resolve().parent
+    base_dir = _base_directory()
     path = (base_dir / CONFIG_FILENAME).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path

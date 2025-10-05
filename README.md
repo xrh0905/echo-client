@@ -68,3 +68,33 @@ tips: 如果没有看到成功的连接请求，可以尝试刷新一下客户�
 
 还没写。
 
+## 打包成单文件可执行程序
+
+项目包含一个 `build.spec`，可用于使用 PyInstaller 打包为单文件（one-folder）或单文件（onefile）可执行程序。步骤如下：
+
+1. 安装依赖，可选择使用 Poetry：
+
+        ```powershell
+        poetry install
+        ```
+
+        或者直接通过 pip 安装运行时依赖（`pyproject.toml` 中的 `[tool.poetry.dependencies]` 列表）：
+
+        ```powershell
+        pip install websockets rich prompt-toolkit pypinyin pyyaml jieba markdown-it-py
+        ```
+
+2. 安装 PyInstaller：
+
+        ```powershell
+        pip install pyinstaller
+        ```
+
+3. 在项目根目录执行：
+
+        ```powershell
+        pyinstaller build.spec
+        ```
+
+打包完成后，可执行文件位于 `dist/echo-client/echo-client.exe`。配置文件 `config.yaml` 会自动复制到输出目录下，首次运行时会在该目录自动生成/更新。挂起的 `config.yaml` 允许在分发后的文件夹内直接调整运行参数。
+

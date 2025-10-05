@@ -11,5 +11,8 @@ dist/
 
 # nix build
 result
+build/
+.vscode/
+dist/
 
 *.log
