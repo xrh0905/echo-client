@@ -1,106 +1,157 @@
-## 简介
+# Echo Client
 
-Echo-client 是一个为无声系虚拟主播设计的命令行终端，不过也可以用于快速制作视频中的字幕
+一个为 Echo-live/OBS 工作流打造的命令行控制台，专注于让无声系虚拟主播和需要批量发送字幕的创作者高效控制弹幕展示。它提供可视化的 CLI 体验、本地配置持久化、丰富的富文本格式，并支持打包为单文件可执行程序。
 
-注意：本项目仍在活跃开发中，下方的所有信息可能会发生改变，请以代码为准。
+> ⚠️ 项目仍在积极开发中，行为可能随版本演化。本文档描述的是 `master` 分支当前实现。
 
-## 安装
+## ✨ 主要特性
 
-首先您需要正确地在 OBS 中安装 Echo-live。
+- **即开即用的本地 WebSocket 服务器**：在本机监听 Echo-live 广播端口，与 OBS 中的 Echo-live 无缝对接。
+- **交互式命令行体验**：基于 `prompt-toolkit` 的彩色终端，内置快捷键和命令提示。
+- **富文本格式与快速标记**：支持 Markdown 强调语法与 `@` 前缀快捷码，快速叠加粗体、斜体、颜色、字号、类名等效果。
+- **Typewriting 与自动停顿**：按需生成打字机效果与自动插入停顿帧，让字幕播放更自然。
+- **批量脚本执行**：通过 `/source` 命令导入 `message_sample.txt` 等脚本文件，实现自动播报。
+- **跨平台打包**：内置 PyInstaller spec，可将工具封装为单文件或单目录可执行程序。
 
-然后定位到 `config.js` 的 websocket 这部分，将 `websocket_enable` 改为 `true`。
+## 🚀 快速开始
 
-下方的 `websocket_url` 中请填写服务端的 ip 地址与端口号。（如果您在一台电脑上同时运行 OBS 和本程序则 ip 可以写 `127.0.0.1`）
+1. 在 OBS 中安装并配置最新的 Echo-live。
+2. 打开 Echo-live 的 `config.js`，设置 WebSocket：
 
-```js
-        // 启用 WebSocket
-        // * 如果没人要求您这么做，请不要动它。
-        // * 广播模式下启用 WebSocket 可连接至服务器以从第三方软件获取消息。
-        // * 可从服务器接收的消息和广播消息一致，发送的消息须使用类似于 JSON.stringify 的方法序列化。
-        // * 详见：https://sheep-realms.github.io/Echo-Live-Doc/dev/broadcast/
-        websocket_enable: true,
-        // WebSocket 连接地址
-        // websocket_url: 'ws://192.168.1.12:3000', // iPad
-        websocket_url: 'ws://127.0.0.1:3000',
+   ```js
+   websocket_enable: true,
+   websocket_url: 'ws://127.0.0.1:3000'
+   ```
+
+   - 若 Echo-live 与本程序不在同一台设备，`websocket_url` 请改为服务器的 IP，且在 echo-client 的配置中把 `host` 改为 `0.0.0.0`。
+3. 安装并运行 echo-client：
+
+   ```powershell
+   pip install echo-client
+   echo-client
+   ```
+
+   或在源码仓库：
+
+   ```powershell
+   poetry install
+   poetry run echo-client
+   ```
+
+首次启动会在工作目录生成 `config.yaml`。终端会打印监听地址、配置路径等提示。
+
+## 🔌 与 Echo-live 对接
+
+- Echo-live 的 WebSocket 客户端连接到 `ws://<host>:<port>`（默认 `127.0.0.1:3000`）。
+- 建议在 OBS 中刷新浏览器源以触发连接。
+- 连接后，终端会显示客户端 ID、显示名称、心跳次数、实时展示状态等事件。
+
+## ⚙️ 配置文件
+
+配置保存于可执行文件或脚本所在目录的 `config.yaml`，字段说明如下：
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `command_prefix` | `str` | `/` | 命令前缀。若要发送以 `/` 开头的消息，可输入 `//文本` 。|
+| `username` | `str` | `Someone` | 推送给 Echo-live 的默认用户名，可交互命令 `/ren` 修改。|
+| `host` | `str` | `127.0.0.1` | WebSocket 监听地址，跨设备使用请改为 `0.0.0.0`。|
+| `port` | `int` | `3000` | WebSocket 监听端口。|
+| `typewriting` | `bool` | `true` | 是否启用打字机同步。`/tt` 可切换。|
+| `autopause` | `bool` | `false` | 自动插入停顿标记。`/ta` 可切换。|
+| `autopausestr` | `str` | `,，.。;；:：!！` | 触发停顿的字符集合。|
+| `autopausetime` | `int` | `10` | 停顿时长单位，取决于打印速度。|
+| `print_speed` | `int` | `10` | 默认打印速度（毫秒/字符），`/ps <value>` 可调整。|
+
+每次通过命令修改都会即时落盘。手动编辑文件后无需重启即可生效（下一条消息时加载）。
+
+## ⌨️ 命令与快捷键
+
+### 控制台命令
+
+命令以 `command_prefix` 开头，可使用别名简写：
+
+| 命令 | 别名 | 描述 |
+| --- | --- | --- |
+| `/rename <name>` | `/ren`, `/name` | 更新默认显示名称并保存配置。|
+| `/speed <ms>` | `/ps`, `/printspeed` | 设置默认打印速度（毫秒/字符）。|
+| `/tt` | `/toggle-typewriting` | 切换 Typewriting 效果。|
+| `/ta` | `/toggle-autopause` | 切换自动停顿。|
+| `/s <file>` | `/source` | 按行执行脚本文件中的指令。|
+| `/q` | `/quit` | 关闭服务器并退出程序。|
+
+> 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
+
+### 输入快捷键
+
+- `Ctrl+B` / `Ctrl+I` / `Ctrl+U` / `Ctrl+D`：插入 `@b`/`@i`/`@u`/`@s` 快速格式码。
+- `Ctrl+↑` / `Ctrl+↓`：插入 `@+` / `@-` 调整字号。
+- `Ctrl+Space`：插入 `@r` 重置临时样式。
+
+## 📝 消息格式
+
+echo-client 同时支持两套叠加格式：
+
+1. **Markdown**：
+   - `**文本**` 或 `__文本__` → 粗体
+   - `*文本*` 或 `_文本_` → 斜体
+   - `` `代码` `` → 代码风格
+2. **快速格式化（Fast Formatting）**：
+
+   | 片段 | 效果 |
+   | --- | --- |
+   | `@b` / `@i` / `@u` / `@s` | 粗体 / 斜体 / 下划线 / 删除线 |
+   | `@[color]` | 设置颜色，例如 `@[#66ccff]` |
+   | `@+` / `@-` | 放大 / 缩小字号（多次叠加） |
+   | `@r` | 恢复默认样式 |
+   | `@{emoji}` | 插入表情或图片占位符 ID |
+   | `@<class>` | 添加 CSS 类，自动加上 `echo-text-` 前缀；`@<:class>` 则原样保留 |
+   | `\@` | 输出字面量 `@`|
+
+更完整的示例请查看仓库中的 `message_sample.txt`，可在程序内运行：
+
+```text
+/s message_sample.txt
 ```
 
-如果您在两台设备上分别运行 OBS 和本程序，请修改配置文件中的 `host` 项为 `0.0.0.0`。
+## 🤖 自动停顿与打字机
 
-```sh
-pip install echo-client
+- **自动停顿（Autopause）**：开启后，程序会在 `autopausestr` 中的字符后插入一个 “pause” 事件，时长由 `autopausetime` 与打印速度共同决定。
+- **Typewriting**：对中文使用 `jieba` 分词，对每段文字生成拼音，配合 Echo-live 的打字机效果。
+
+两项能力都可随时通过命令切换，并立即作用于接下来的消息。
+
+## 📦 打包可执行文件
+
+仓库内置 `build.spec` 与 `echo-client.spec`。使用 PyInstaller 打包：
+
+```powershell
+poetry install  # 或 pip install 所需依赖
+pip install pyinstaller
+pyinstaller --onefile --name echo-client build.spec
+# 或
+pyinstaller echo-client.spec
 ```
 
-## 使用
+构建完成的单文件位于 `dist/echo-client.exe`。可执行文件会在自身目录创建/更新 `config.yaml`，无需额外携带配置。
 
-您需要正确完成“安装”章节。
+## 🛠 开发与贡献
 
-正确运行程序，控制台输出应该类似这样（有颜色）：
-
-```
-从 ./config.yaml 加载了配置
-已经在 127.0.0.1:3000 监听 websocket 请求，等待 echo 客户端接入...
-tips: 如果没有看到成功的连接请求，可以尝试刷新一下客户端
-用户输入模块加载成功，您现在可以开始输入命令了，客户端连接后会自动执行！
-请输入命令:
+```powershell
+git clone https://github.com/xrh0905/echo-client.git
+cd echo-client
+poetry install
+poetry run echo-client
 ```
 
-配置文件现在存储在程序工作目录下的 `config.yaml` 中，不再写入 AppData 或 `~/.config`。默认已经启用 Typewriting 模式，如需关闭可以手动修改配置或在交互界面使用 `/tt` 指令。
+- 代码格式建议使用 `ruff`/`pylint` 等工具（仓库默认提供 `pylint`）。
+- 提交 PR 或 issue 前请说明使用场景，尤其是 Echo-live 与 echo-client 的版本信息。
 
-文本输入支持基础 Markdown 语法：使用 `**粗体**` 或 `__粗体__` 可以强调，`*斜体*` 或 `_斜体_` 可以倾斜显示，同样适用于命令里叠加的样式。
+## ❓ 常见问题
 
-为了快速调整消息效果，可以使用“快速格式化代码”：
+- **客户端无法连接**：确认 Echo-live 的 `websocket_url` 是否指向本机监听地址，并检查端口占用问题。
+- **消息没有格式效果**：确保 Echo-live 版本支持传入的字段；`@` 快捷码与 Markdown 可叠加使用。
+- **打字机太慢/太快**：通过 `/ps <毫秒>` 即时调整打印速度，或修改 `config.yaml` 后重启。
+- **想要批量发送**：将指令写入文本文件后使用 `/s your_file.txt`。
 
-- `@b`、`@i`、`@u`、`@s` 分别表示粗体、斜体、下划线、删除线。
-- `@[#66ccff]` 设置文本颜色，`@r` 清除临时格式。
-- `@+` 与 `@-` 调整字号，`@<class>` 为文本添加类名，`@{id}` 插入表情或图片占位。
-
-默认打印速度为 30ms/字符，可随时使用 `/speed 50`（或 `/printspeed`, `/ps`）命令调整，所有消息会自动携带 `printSpeed` 启动参数。
-
-然后刷新 OBS 中的预览窗口，您应该可以看见 websocket 连接成功的提示。
-
-命令应该怎么写呢？
-
-请看项目根目录下的 message_sample.txt，这是一个包含了目前可以使用的所有格式的示例文件。
-
-有关该文件的更多信息请点开查看。
-
-## 配置
-
-还没写。
-
-## 打包成单文件可执行程序
-
-项目包含一个 `build.spec`，可用于使用 PyInstaller 打包为单文件（one-folder）或单文件（onefile）可执行程序。步骤如下：
-
-1. 安装依赖，可选择使用 Poetry：
-
-        ```powershell
-        poetry install
-        ```
-
-        或者直接通过 pip 安装运行时依赖（`pyproject.toml` 中的 `[tool.poetry.dependencies]` 列表）：
-
-        ```powershell
-        pip install websockets rich prompt-toolkit pypinyin pyyaml jieba markdown-it-py
-        ```
-
-2. 安装 PyInstaller：
-
-        ```powershell
-        pip install pyinstaller
-        ```
-
-3. 在项目根目录执行（生成单文件 exe）：
-
-        ```powershell
-        pyinstaller --onefile --name echo-client build.spec
-        ```
-
-        或者使用自动生成的 `echo-client.spec`：
-
-        ```powershell
-        pyinstaller echo-client.spec
-        ```
-
-打包完成后，单文件位于 `dist/echo-client.exe`。运行后将在可执行文件所在目录自动创建或更新 `config.yaml`，无需随包分发。
+欢迎通过 issue、讨论区或 PR 分享使用心得与改进建议！
 
