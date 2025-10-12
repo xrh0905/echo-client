@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 import websockets
 from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 
@@ -47,6 +48,7 @@ class EchoServer:
         self._server: Any | None = None
         self._input_session: PromptSession | None = None
         self._command_registry = self._build_command_registry()
+        self._key_bindings = self._build_key_bindings()
         self._heartbeat_counts: dict[int, int] = {}
         self._client_names: dict[int, str] = {}
         self._live_display_visibility: dict[int, bool] = {}
@@ -277,7 +279,9 @@ class EchoServer:
             )
 
     async def _run_input_loop(self) -> None:
-        self._input_session = self._input_session or PromptSession()
+        self._input_session = self._input_session or PromptSession(
+            key_bindings=self._key_bindings
+        )
 
         while True:
             try:
@@ -299,13 +303,11 @@ class EchoServer:
 
         literal = self._literal_message_from_command(command, prefix)
         if literal is not None:
-            self.console.print(f"发送文字消息: {literal}")
-            self._enqueue_message(literal)
+            self._send_literal_message(literal)
             return True
 
         if not command.startswith(prefix):
-            self.console.print(f"发送文字消息: {command}")
-            self._enqueue_message(command)
+            self._send_literal_message(command)
             return True
 
         parts = command.split()
@@ -427,6 +429,10 @@ class EchoServer:
         delay = get_delay(self.config, syntax)
         self._events.append({"action": "message_data", "data": payload, "delay": delay})
 
+    def _send_literal_message(self, text: str) -> None:
+        self.console.print(f"发送文字消息: {text}")
+        self._enqueue_message(text)
+
     def _connection_is_closed(self, websocket: Any) -> bool:
         closed_attr = getattr(websocket, "closed", None)
         if isinstance(closed_attr, bool):
@@ -460,6 +466,26 @@ class EchoServer:
         self.console.print(
             f"客户端{client_id}: 实时展示 {state_label}{vanish_hint}{extra}"
         )
+
+    def _build_key_bindings(self) -> KeyBindings:
+        bindings = {
+            "c-b": "@b",
+            "c-i": "@i",
+            "c-u": "@u",
+            "c-d": "@s",
+            "c-up": "@+",
+            "c-down": "@-",
+            "c-space": "@r",
+        }
+
+        key_bindings = KeyBindings()
+
+        for key_seq, payload in bindings.items():
+            @key_bindings.add(key_seq)
+            def _handler(event: KeyPressEvent, payload: str = payload) -> None:
+                event.current_buffer.insert_text(payload)
+
+        return key_bindings
 
 
 def main() -> None:
