@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import jieba
 from markdown_it import MarkdownIt
-from pypinyin import lazy_pinyin
+from pypinyin import Style, lazy_pinyin
 
 ALPHABETIC = set(string.ascii_letters)
 DEFAULT_PRINT_SPEED = 30
@@ -15,10 +15,19 @@ SIZE_STEPS = ["extra-small", "small", "middle", "large", "extra-large"]
 SIZE_DEFAULT_INDEX = SIZE_STEPS.index("middle")
 _MARKDOWN = MarkdownIt("commonmark")
 
+TYPEWRITING_SCHEMES = {"pinyin", "zhuyin"}
+DEFAULT_TYPEWRITING_SCHEME = "pinyin"
 
-def get_typewriting_string(text: str) -> str:
-    """Return a phonetic representation for the typewriting effect."""
-    result = []
+
+def normalize_typewriting_scheme(scheme: str | None) -> str:
+    normalized = (scheme or DEFAULT_TYPEWRITING_SCHEME).strip().lower()
+    if normalized in TYPEWRITING_SCHEMES:
+        return normalized
+    return DEFAULT_TYPEWRITING_SCHEME
+
+
+def _typewriting_pinyin(text: str) -> str:
+    result: List[str] = []
     for idx, char in enumerate(text):
         if char in ALPHABETIC:
             result.append(char)
@@ -29,6 +38,28 @@ def get_typewriting_string(text: str) -> str:
         if pinyin:
             result.append(pinyin[0])
     return "".join(result)
+
+
+def _typewriting_zhuyin(text: str) -> str:
+    result: List[str] = []
+    for char in text:
+        if char in ALPHABETIC:
+            result.append(char)
+            continue
+        reading = lazy_pinyin(char, style=Style.BOPOMOFO)
+        if reading:
+            syl = reading[0]
+            if isinstance(syl, str) and syl:
+                result.append(syl)
+    return "".join(result)
+
+
+def get_typewriting_string(text: str, scheme: str | None = None) -> str:
+    """Return a phonetic representation for the typewriting effect."""
+    normalized = normalize_typewriting_scheme(scheme)
+    if normalized == "zhuyin":
+        return _typewriting_zhuyin(text)
+    return _typewriting_pinyin(text)
 
 
 def _tokenize_for_typewrite(text: str) -> List[str]:
@@ -413,6 +444,9 @@ def get_delay(config: Dict[str, Any], messages: Iterable[Dict[str, Any]]) -> int
 def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
     """Serialize the parsed messages into the websocket payload format."""
     payload = []
+    typewriting_scheme = normalize_typewriting_scheme(
+        str(config.get("typewriting_scheme", DEFAULT_TYPEWRITING_SCHEME))
+    )
     for message in messages:
         data = _clone_entry(message)
         text_value = data.get("text")
@@ -424,13 +458,13 @@ def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
                 for segment in segments:
                     seg_entry = _clone_entry({key: value for key, value in data.items() if key != "text"})
                     seg_entry["text"] = segment
-                    typewrite_value = get_typewriting_string(segment)
+                    typewrite_value = get_typewriting_string(segment, typewriting_scheme)
                     if typewrite_value:
                         seg_entry["typewrite"] = typewrite_value
                     _ensure_print_speed(config, seg_entry)
                     payload.append(seg_entry)
                 continue
-            typewrite_value = get_typewriting_string(text_value)
+            typewrite_value = get_typewriting_string(text_value, typewriting_scheme)
             if typewrite_value:
                 data["typewrite"] = typewrite_value
             if isinstance(data.get("style"), dict):
@@ -454,6 +488,7 @@ __all__ = [
     "apply_autopause",
     "get_delay",
     "get_typewriting_string",
+    "normalize_typewriting_scheme",
     "parse_message",
     "render",
 ]

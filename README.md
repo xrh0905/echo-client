@@ -57,6 +57,7 @@
 | `host` | `str` | `127.0.0.1` | WebSocket 监听地址，跨设备使用请改为 `0.0.0.0`。|
 | `port` | `int` | `3000` | WebSocket 监听端口。|
 | `typewriting` | `bool` | `true` | 是否启用打字机同步。`/tt` 可切换。|
+| `typewriting_scheme` | `str` | `pinyin` | 打字机模式，支持 `pinyin`（拼音）与 `zhuyin`（注音），`/tts` 可切换。|
 | `autopause` | `bool` | `false` | 自动插入停顿标记。`/ta` 可切换。|
 | `autopausestr` | `str` | `,，.。;；:：!！` | 触发停顿的字符集合。|
 | `autopausetime` | `int` | `10` | 停顿时长单位，取决于打印速度。|
@@ -75,6 +76,7 @@
 | `/rename <name>` | `/ren`, `/name` | 更新默认显示名称并保存配置。|
 | `/speed <ms>` | `/ps`, `/printspeed` | 设置默认打印速度（毫秒/字符）。|
 | `/tt` | `/toggle-typewriting` | 切换 Typewriting 效果。|
+| `/tts` | `/toggle-typewriting-scheme` | 在拼音与注音模式之间切换 Typewriting。|
 | `/ta` | `/toggle-autopause` | 切换自动停顿。|
 | `/s <file>` | `/source` | 按行执行脚本文件中的指令。|
 | `/q` | `/quit` | 关闭服务器并退出程序。|
@@ -116,7 +118,7 @@ echo-client 同时支持两套叠加格式：
 ## 🤖 自动停顿与打字机
 
 - **自动停顿（Autopause）**：开启后，程序会在 `autopausestr` 中的字符后插入一个 “pause” 事件，时长由 `autopausetime` 与打印速度共同决定。
-- **Typewriting**：对中文使用 `jieba` 分词，对每段文字生成拼音，配合 Echo-live 的打字机效果。
+- **Typewriting**：对中文使用 `jieba` 分词，对每段文字生成拼音，配合 Echo-live 的打字机效果；也可切换为注音模式，以 Bopomofo 输出。
 
 两项能力都可随时通过命令切换，并立即作用于接下来的消息。
 

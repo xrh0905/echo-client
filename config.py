@@ -20,6 +20,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "host": "127.0.0.1",
     "port": 3000,
     "typewriting": True,
+    "typewriting_scheme": "pinyin",
     "autopause": False,
     "autopausestr": ",，.。;；:：!！",
     "autopausetime": 10,

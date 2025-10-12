@@ -17,7 +17,13 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 
 from config import load_config, save_config
-from message import apply_autopause, get_delay, parse_message, render
+from message import (
+    apply_autopause,
+    get_delay,
+    normalize_typewriting_scheme,
+    parse_message,
+    render,
+)
 
 PING_PAYLOAD = json.dumps({"action": "ping", "data": {}}, ensure_ascii=False)
 
@@ -97,6 +103,14 @@ class EchoServer:
                 min_args=0,
                 max_args=0,
                 description="切换 typewriting 效果",
+            ),
+            CommandSpec(
+                name="toggle-typewriting-scheme",
+                aliases=("toggle-typewriting-scheme", "tts"),
+                handler=self._cmd_toggle_typewriting_scheme,
+                min_args=0,
+                max_args=0,
+                description="在拼音与注音之间切换打字机模式",
             ),
             CommandSpec(
                 name="toggle-autopause",
@@ -374,6 +388,16 @@ class EchoServer:
         self._persist_config()
         self.console.print(
             f"[green]Typewriting 状态已经变更为 {self.config['typewriting']}[/green]"
+        )
+        return True
+
+    def _cmd_toggle_typewriting_scheme(self, _args: list[str]) -> bool:
+        current = normalize_typewriting_scheme(self.config.get("typewriting_scheme"))
+        next_scheme = "zhuyin" if current == "pinyin" else "pinyin"
+        self.config["typewriting_scheme"] = next_scheme
+        self._persist_config()
+        self.console.print(
+            f"[green]Typewriting 模式已切换为 {next_scheme}[/green]"
         )
         return True
 
