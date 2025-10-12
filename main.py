@@ -17,7 +17,14 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 
 from config import load_config, save_config
-from message import apply_autopause, get_delay, parse_message, render
+from message import (
+    TYPEWRITING_SCHEMES,
+    apply_autopause,
+    get_delay,
+    parse_message,
+    render,
+    normalize_typewriting_scheme,
+)
 
 PING_PAYLOAD = json.dumps({"action": "ping", "data": {}}, ensure_ascii=False)
 
@@ -89,6 +96,14 @@ class EchoServer:
                 min_args=1,
                 max_args=1,
                 description="调整默认打印速度 (毫秒)",
+            ),
+            CommandSpec(
+                name="typewriting-scheme",
+                aliases=("typewriting-scheme", "ts"),
+                handler=self._cmd_set_typewriting_scheme,
+                min_args=1,
+                max_args=1,
+                description="切换打字机模式 (pinyin/zhuyin/ipa)",
             ),
             CommandSpec(
                 name="toggle-typewriting",
@@ -367,6 +382,28 @@ class EchoServer:
         self.config["print_speed"] = value
         self._persist_config()
         self.console.print(f"[green]打印速度已设置为 {value}ms[/green]")
+        return True
+
+    def _cmd_set_typewriting_scheme(self, args: list[str]) -> bool:
+        raw = args[0].strip().lower()
+        if raw not in TYPEWRITING_SCHEMES:
+            valid = ", ".join(sorted(TYPEWRITING_SCHEMES))
+            self.console.print(
+                f"[red]未知的打字机模式，可选值: {valid}[/red]"
+            )
+            return True
+
+        scheme = normalize_typewriting_scheme(raw)
+        if scheme != raw:
+            self.console.print(
+                f"[yellow]已将输入标准化为 {scheme}[/yellow]"
+            )
+
+        self.config["typewriting_scheme"] = scheme
+        self._persist_config()
+        self.console.print(
+            f"[green]Typewriting 模式已切换为 {scheme}[/green]"
+        )
         return True
 
     def _cmd_toggle_typewriting(self, _args: list[str]) -> bool:

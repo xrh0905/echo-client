@@ -6,28 +6,89 @@ import string
 from typing import Any, Dict, Iterable, List, Optional
 
 import jieba
+from dragonmapper import hanzi
 from markdown_it import MarkdownIt
-from pypinyin import lazy_pinyin
+from pypinyin import Style, lazy_pinyin
 
 ALPHABETIC = set(string.ascii_letters)
 DEFAULT_PRINT_SPEED = 30
 SIZE_STEPS = ["extra-small", "small", "middle", "large", "extra-large"]
 SIZE_DEFAULT_INDEX = SIZE_STEPS.index("middle")
 _MARKDOWN = MarkdownIt("commonmark")
+TYPEWRITING_SCHEMES = {"pinyin", "zhuyin", "ipa"}
 
 
-def get_typewriting_string(text: str) -> str:
+def normalize_typewriting_scheme(scheme: str) -> str:
+    normalized = (scheme or "pinyin").lower()
+    if normalized in TYPEWRITING_SCHEMES:
+        return normalized
+    return "pinyin"
+
+
+def _typewriting_pinyin(char: str) -> str:
+    try:
+        syllables = lazy_pinyin(char, style=Style.NORMAL)
+    except (ValueError, TypeError):
+        return ""
+    if not syllables:
+        return ""
+    syllable = syllables[0]
+    if not isinstance(syllable, str) or not syllable:
+        return ""
+    return syllable.lower()
+
+
+def _typewriting_zhuyin(char: str) -> str:
+    try:
+        reading = hanzi.to_zhuyin(char)
+    except (ValueError, TypeError):
+        return ""
+    return reading if isinstance(reading, str) and reading != char else ""
+
+
+def _typewriting_ipa(char: str) -> str:
+    try:
+        reading = hanzi.to_ipa(char)
+    except (ValueError, TypeError):
+        return ""
+    return reading if isinstance(reading, str) and reading != char else ""
+
+
+def _transliterate_char(char: str, scheme: str) -> str:
+    if scheme == "zhuyin":
+        return _typewriting_zhuyin(char)
+    if scheme == "ipa":
+        return _typewriting_ipa(char)
+    return _typewriting_pinyin(char)
+
+
+def get_typewriting_string(text: str, scheme: str = "pinyin") -> str:
     """Return a phonetic representation for the typewriting effect."""
-    result = []
+    scheme = normalize_typewriting_scheme(scheme)
+
+    result: List[str] = []
+    last_alpha = False
     for idx, char in enumerate(text):
         if char in ALPHABETIC:
             result.append(char)
+            last_alpha = bool(char and char[-1].isalpha())
             continue
-        if idx != 0 and text[idx - 1] not in ALPHABETIC:
-            result.append("'")
-        pinyin = lazy_pinyin(char)
-        if pinyin:
-            result.append(pinyin[0])
+        reading = _transliterate_char(char, scheme)
+        if not reading:
+            continue
+        if scheme == "pinyin":
+            need_apostrophe = False
+            if idx != 0 and text[idx - 1] not in ALPHABETIC:
+                need_apostrophe = True
+            elif last_alpha and reading[0] in "aeiouv":
+                need_apostrophe = True
+            if need_apostrophe and (not result or result[-1] != "'"):
+                result.append("'")
+            result.append(reading)
+            last_alpha = reading[-1].isalpha()
+        else:
+            result.append(reading)
+            last_alpha = False
     return "".join(result)
 
 
@@ -413,6 +474,7 @@ def get_delay(config: Dict[str, Any], messages: Iterable[Dict[str, Any]]) -> int
 def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
     """Serialize the parsed messages into the websocket payload format."""
     payload = []
+    typewriting_scheme = normalize_typewriting_scheme(str(config.get("typewriting_scheme", "pinyin")))
     for message in messages:
         data = _clone_entry(message)
         text_value = data.get("text")
@@ -424,13 +486,13 @@ def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
                 for segment in segments:
                     seg_entry = _clone_entry({key: value for key, value in data.items() if key != "text"})
                     seg_entry["text"] = segment
-                    typewrite_value = get_typewriting_string(segment)
+                    typewrite_value = get_typewriting_string(segment, typewriting_scheme)
                     if typewrite_value:
                         seg_entry["typewrite"] = typewrite_value
                     _ensure_print_speed(config, seg_entry)
                     payload.append(seg_entry)
                 continue
-            typewrite_value = get_typewriting_string(text_value)
+            typewrite_value = get_typewriting_string(text_value, typewriting_scheme)
             if typewrite_value:
                 data["typewrite"] = typewrite_value
             if isinstance(data.get("style"), dict):
@@ -454,6 +516,8 @@ __all__ = [
     "apply_autopause",
     "get_delay",
     "get_typewriting_string",
+    "normalize_typewriting_scheme",
+    "TYPEWRITING_SCHEMES",
     "parse_message",
     "render",
 ]

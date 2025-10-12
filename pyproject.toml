@@ -14,6 +14,7 @@ pypinyin = "^0.50.0"
 pyyaml = "^6.0.1"
 jieba = "^0.42.1"
 "markdown-it-py" = "^3.0.0"
+dragonmapper = "^0.3.0"
 
 [tool.poetry.scripts]
 echo-client = 'main:main'
