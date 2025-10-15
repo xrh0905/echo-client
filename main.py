@@ -44,6 +44,7 @@ class CommandSpec:
     max_args: int | None = 0
     description: str = ""
     legacy_aliases: tuple[str, ...] = field(default_factory=tuple)
+    status_getter: Callable[["EchoServer"], Optional[str]] | None = None
 
 
 class EchoServer:
@@ -68,6 +69,28 @@ class EchoServer:
     def _build_command_registry(self) -> dict[str, CommandSpec]:
         """Create the lookup table that powers console commands."""
 
+        def bool_status(key: str, default: bool = False) -> Callable[["EchoServer"], str]:
+            def _status(server: "EchoServer", key: str = key, default: bool = default) -> str:
+                return "开启" if bool(server.config.get(key, default)) else "关闭"
+
+            return _status
+
+        def username_status(server: "EchoServer") -> str:
+            value = str(server.config.get("username", "/")).strip()
+            return value or "(空)"
+
+        def speed_status(server: "EchoServer") -> str:
+            value = server.config.get("print_speed")
+            if isinstance(value, (int, float)):
+                return f"{value} ms"
+            return "未设置"
+
+        def parentheses_status(server: "EchoServer") -> str:
+            base = "开启" if server.config.get("auto_parentheses", False) else "关闭"
+            if server._parentheses_once:
+                base += "；下一条临时开启"
+            return base
+
         commands = (
             CommandSpec(
                 name="help",
@@ -91,6 +114,7 @@ class EchoServer:
                 max_args=1,
                 description="更新显示名称",
                 legacy_aliases=("rename",),
+                status_getter=username_status,
             ),
             CommandSpec(
                 name="speed",
@@ -100,6 +124,7 @@ class EchoServer:
                 max_args=1,
                 description="调整默认打印速度 (毫秒)",
                 legacy_aliases=("printspeed", "print-speed"),
+                status_getter=speed_status,
             ),
             CommandSpec(
                 name="typewrite",
@@ -107,13 +132,17 @@ class EchoServer:
                 handler=self._cmd_toggle_typewriting,
                 description="切换 typewriting 效果",
                 legacy_aliases=("toggle-typewriting",),
+                status_getter=bool_status("typewriting", False),
             ),
             CommandSpec(
                 name="scheme",
-                aliases=("ts",),
+                aliases=("ts", "tts"),
                 handler=self._cmd_toggle_typewriting_scheme,
                 description="在拼音与注音之间切换打字机模式",
                 legacy_aliases=("toggle-typewriting-scheme",),
+                status_getter=lambda srv: normalize_typewriting_scheme(
+                    srv.config.get("typewriting_scheme")
+                ),
             ),
             CommandSpec(
                 name="autopause",
@@ -121,6 +150,7 @@ class EchoServer:
                 handler=self._cmd_toggle_autopause,
                 description="切换 autopause 模式",
                 legacy_aliases=("toggle-autopause",),
+                status_getter=bool_status("autopause", False),
             ),
             CommandSpec(
                 name="quotes",
@@ -128,6 +158,7 @@ class EchoServer:
                 handler=self._cmd_toggle_quotes,
                 description="切换是否自动为消息添加双引号",
                 legacy_aliases=("toggle-quotes",),
+                status_getter=bool_status("auto_quotes", True),
             ),
             CommandSpec(
                 name="paren",
@@ -136,6 +167,7 @@ class EchoServer:
                 max_args=1,
                 description="切换圆括号包装，或使用 'once' 对下一条消息生效",
                 legacy_aliases=("parentheses",),
+                status_getter=parentheses_status,
             ),
             CommandSpec(
                 name="brackets",
@@ -143,6 +175,7 @@ class EchoServer:
                 handler=self._cmd_toggle_username_brackets,
                 description="切换是否使用【】包裹用户名",
                 legacy_aliases=("toggle-username-brackets",),
+                status_getter=bool_status("username_brackets", False),
             ),
             CommandSpec(
                 name="source",
@@ -520,6 +553,7 @@ class EchoServer:
         table = Table(show_header=True, header_style="bold cyan")
         table.add_column("命令")
         table.add_column("常用别名")
+        table.add_column("当前值")
         table.add_column("参数")
         table.add_column("说明", overflow="fold")
 
@@ -527,6 +561,7 @@ class EchoServer:
             table.add_row(
                 f"{prefix}{spec.name}",
                 self._format_aliases(spec.aliases, prefix),
+                self._command_status(spec),
                 self._argument_hint(spec),
                 spec.description or "-",
             )
@@ -577,6 +612,9 @@ class EchoServer:
             self.console.print(f"[white]历史别名[/white]: {legacy_aliases}")
 
         self.console.print(f"[white]参数[/white]: {self._argument_hint(spec)}")
+        status = self._command_status(spec)
+        if status != "-":
+            self.console.print(f"[white]当前值[/white]: {status}")
 
     def _suggest_commands(self, token: str, limit: int = 3) -> list[str]:
         if not token:
@@ -595,6 +633,18 @@ class EchoServer:
                 suggestions.append(command_name)
                 seen.add(command_name)
         return suggestions
+
+    def _command_status(self, spec: CommandSpec) -> str:
+        if spec.status_getter is None:
+            return "-"
+        try:
+            status = spec.status_getter(self)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            self.console.log(f"[red]无法获取 {spec.name} 当前状态: {exc}[/red]")
+            return "-"
+        if status is None or status == "":
+            return "-"
+        return str(status)
 
     @staticmethod
     def _literal_message_from_command(command: str, prefix: str) -> Optional[str]:

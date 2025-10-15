@@ -58,7 +58,7 @@
 | `host` | `str` | `127.0.0.1` | WebSocket 监听地址，跨设备使用请改为 `0.0.0.0`。|
 | `port` | `int` | `3000` | WebSocket 监听端口。|
 | `typewriting` | `bool` | `true` | 是否启用打字机同步。`/typewrite`（或 `/tt`）可切换。|
-| `typewriting_scheme` | `str` | `pinyin` | 打字机模式，支持 `pinyin`（拼音）与 `zhuyin`（注音），`/scheme`（或 `/tts`）可切换。|
+| `typewriting_scheme` | `str` | `pinyin` | 打字机模式，支持 `pinyin`（拼音）与 `zhuyin`（注音），`/scheme`（`/ts` 或 `/tts`）可切换。|
 | `autopause` | `bool` | `false` | 自动插入停顿标记。`/autopause`（或 `/ta`）可切换。|
 | `autopausestr` | `str` | `,，.。;；:：!！` | 触发停顿的字符集合。|
 | `autopausetime` | `int` | `10` | 停顿时长单位，取决于打印速度。|
@@ -82,7 +82,7 @@
 | `/name <name>` | `/ren` | 更新默认显示名称并保存配置。|
 | `/speed <ms>` | `/ps` | 设置默认打印速度（毫秒/字符）。|
 | `/typewrite` | `/tt` | 切换 Typewriting 效果。|
-| `/scheme` | `/tts` | 在拼音与注音模式之间切换 Typewriting。|
+| `/scheme` | `/ts`, `/tts` | 在拼音与注音模式之间切换 Typewriting。|
 | `/autopause` | `/ta` | 切换自动停顿。|
 | `/quotes` | `/tq` | 切换是否自动为消息添加双引号。|
 | `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
@@ -90,6 +90,7 @@
 | `/source <file>` | `/src`, `/load` | 按行执行脚本文件中的指令。|
 
 > 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
+> 使用 `/help` 可查看命令列表，并随时了解各开关的当前状态。
 
 ### 输入快捷键
 
