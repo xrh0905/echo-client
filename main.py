@@ -178,6 +178,13 @@ class EchoServer:
                 status_getter=bool_status("username_brackets", False),
             ),
             CommandSpec(
+                name="skip",
+                aliases=("cancel",),
+                handler=self._cmd_skip,
+                description="向客户端发送 echo_next 指令",
+                legacy_aliases=("next", "tn"),
+            ),
+            CommandSpec(
                 name="source",
                 aliases=("src", "load"),
                 handler=self._cmd_source,
@@ -327,26 +334,55 @@ class EchoServer:
                     continue
 
                 for event in self._events[proceed:]:
-                    self.console.print(f"客户端{client_id}: 执行 {event['action']}")
-                    if event["action"] == "message_data":
-                        self.console.print(f"客户端{client_id}: 发送文字信息")
-                        try:
-                            await websocket.send(event["data"])
-                        except websockets.exceptions.ConnectionClosedOK:
-                            self.console.print(
-                                f"客户端{client_id}: 连接已优雅关闭，停止发送事件"
-                            )
-                            return
-                        except websockets.exceptions.ConnectionClosed as exc:
-                            self.console.print(
-                                f"客户端{client_id}: 无法发送事件，连接已关闭 ({exc.code})"
-                            )
-                            return
-                        await asyncio.sleep(event["delay"] / 1000.0)
-                    else:
+                    payload = event.get("payload")
+                    if not isinstance(payload, str):
                         self.console.print(
-                            f"[red]客户端{client_id}: 未知事件类型 {event['action']}，已忽略[/red]"
+                            f"[red]客户端{client_id}: 事件缺少可发送的 payload，已忽略[/red]"
                         )
+                        continue
+
+                    label = event.get("label")
+                    if label is None:
+                        try:
+                            parsed_candidate = json.loads(payload)
+                        except json.JSONDecodeError:
+                            parsed_candidate = None
+                        if isinstance(parsed_candidate, dict):
+                            raw_label = parsed_candidate.get("action")
+                            if isinstance(raw_label, str) and raw_label:
+                                label = raw_label
+
+                    if not isinstance(label, str) or not label:
+                        label = None
+
+                    description = event.get("description")
+                    if label:
+                        self.console.print(f"客户端{client_id}: 执行 {label}")
+                    else:
+                        self.console.print(f"客户端{client_id}: 执行自定义 payload")
+
+                    if description:
+                        self.console.print(f"客户端{client_id}: {description}")
+                    elif label == "message_data":
+                        self.console.print(f"客户端{client_id}: 发送文字信息")
+
+                    try:
+                        await websocket.send(payload)
+                    except websockets.exceptions.ConnectionClosedOK:
+                        self.console.print(
+                            f"客户端{client_id}: 连接已优雅关闭，停止发送事件"
+                        )
+                        return
+                    except websockets.exceptions.ConnectionClosed as exc:
+                        code_repr = getattr(exc, "code", "?")
+                        self.console.print(
+                            f"客户端{client_id}: 无法发送事件，连接已关闭 ({code_repr})"
+                        )
+                        return
+
+                    delay_value = event.get("delay")
+                    if isinstance(delay_value, (int, float)) and delay_value > 0:
+                        await asyncio.sleep(delay_value / 1000.0)
                 proceed = len(self._events)
         except asyncio.CancelledError:
             pass
@@ -530,6 +566,14 @@ class EchoServer:
         )
         return True
 
+    def _cmd_skip(self, args: list[str]) -> bool:
+        if args:
+            self.console.print("[yellow]/skip 不需要参数，已忽略额外输入。[/yellow]")
+        payload = json.dumps({"action": "echo_next", "data": {}}, ensure_ascii=False)
+        self._enqueue_payload(payload, label="echo_next", description="触发 echo_next")
+        self.console.print("[green]已加入 echo_next 指令（由 /skip 触发）[/green]")
+        return True
+
     def _cmd_help(self, args: list[str]) -> bool:
         prefix = self.config["command_prefix"]
 
@@ -700,12 +744,34 @@ class EchoServer:
         self._parentheses_once = False
         return result
 
+    def _enqueue_payload(
+        self,
+        payload: str,
+        *,
+        delay: int | float | None = None,
+        label: str | None = None,
+        description: str | None = None,
+    ) -> None:
+        event: dict[str, Any] = {"payload": payload}
+        if label:
+            event["label"] = label
+        if description:
+            event["description"] = description
+        if isinstance(delay, (int, float)) and delay > 0:
+            event["delay"] = delay
+        self._events.append(event)
+
     def _enqueue_message(self, text: str) -> None:
         syntax = parse_message(text)
         syntax = apply_autopause(self.config, syntax)
         payload = render(self.config, syntax)
         delay = get_delay(self.config, syntax)
-        self._events.append({"action": "message_data", "data": payload, "delay": delay})
+        self._enqueue_payload(
+            payload,
+            delay=delay,
+            label="message_data",
+            description="发送文字信息",
+        )
 
     def _send_literal_message(self, text: str) -> None:
         decorated = self._decorate_outgoing_text(text)

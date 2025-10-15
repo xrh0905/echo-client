@@ -82,11 +82,12 @@
 | `/name <name>` | `/ren` | 更新默认显示名称并保存配置。|
 | `/speed <ms>` | `/ps` | 设置默认打印速度（毫秒/字符）。|
 | `/typewrite` | `/tt` | 切换 Typewriting 效果。|
-| `/scheme` | `/ts`, `/tts` | 在拼音与注音模式之间切换 Typewriting。|
+| `/scheme` | `/ts` | 在拼音与注音模式之间切换 Typewriting。|
 | `/autopause` | `/ta` | 切换自动停顿。|
 | `/quotes` | `/tq` | 切换是否自动为消息添加双引号。|
 | `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
 | `/brackets` | `/ub`, `/tub` | 切换是否用 `【】` 包裹用户名。|
+| `/skip` | `/cancel` | 立即广播 `echo_next` 指令，促使对话框播放下一条消息。|
 | `/source <file>` | `/src`, `/load` | 按行执行脚本文件中的指令。|
 
 > 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
