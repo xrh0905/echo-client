@@ -19,6 +19,20 @@ TYPEWRITING_SCHEMES = {"pinyin", "zhuyin"}
 DEFAULT_TYPEWRITING_SCHEME = "pinyin"
 
 
+def _format_username(config: Dict[str, Any]) -> str:
+    raw = config.get("username", "/")
+    username = "/" if raw is None else str(raw)
+    if not config.get("username_brackets", False):
+        return username
+
+    inner = username.strip()
+    if inner.startswith("【") and inner.endswith("】") and len(inner) >= 2:
+        return inner
+    if inner:
+        return f"【{inner}】"
+    return "【】"
+
+
 def normalize_typewriting_scheme(scheme: str | None) -> str:
     normalized = (scheme or DEFAULT_TYPEWRITING_SCHEME).strip().lower()
     if normalized in TYPEWRITING_SCHEMES:
@@ -447,6 +461,7 @@ def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
     typewriting_scheme = normalize_typewriting_scheme(
         str(config.get("typewriting_scheme", DEFAULT_TYPEWRITING_SCHEME))
     )
+    username_value = _format_username(config)
     for message in messages:
         data = _clone_entry(message)
         text_value = data.get("text")
@@ -475,7 +490,7 @@ def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
         {
             "action": "message_data",
             "data": {
-                "username": config.get("username", "/"),
+                "username": username_value,
                 "messages": [
                     {"message": payload},
                 ],

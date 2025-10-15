@@ -6,7 +6,8 @@ import contextlib
 import itertools
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +16,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
+from rich.table import Table
 
 from config import load_config, save_config
 from message import (
@@ -41,6 +43,7 @@ class CommandSpec:
     min_args: int = 0
     max_args: int | None = 0
     description: str = ""
+    legacy_aliases: tuple[str, ...] = field(default_factory=tuple)
 
 
 class EchoServer:
@@ -53,78 +56,111 @@ class EchoServer:
         self._client_ids = itertools.count(1)
         self._server: Any | None = None
         self._input_session: PromptSession | None = None
+        self._command_specs: tuple[CommandSpec, ...] = ()
         self._command_registry = self._build_command_registry()
         self._key_bindings = self._build_key_bindings()
         self._heartbeat_counts: dict[int, int] = {}
         self._client_names: dict[int, str] = {}
         self._live_display_visibility: dict[int, bool] = {}
         self._graceful_disconnect_requests: dict[int, bool] = {}
+        self._parentheses_once: bool = False
 
     def _build_command_registry(self) -> dict[str, CommandSpec]:
         """Create the lookup table that powers console commands."""
 
         commands = (
             CommandSpec(
-                name="rename",
-                aliases=("rename", "name", "ren"),
+                name="help",
+                aliases=("h", "?"),
+                handler=self._cmd_help,
+                min_args=0,
+                max_args=1,
+                description="显示可用命令与别名",
+            ),
+            CommandSpec(
+                name="quit",
+                aliases=("q", "exit"),
+                handler=self._cmd_quit,
+                description="关闭服务器",
+            ),
+            CommandSpec(
+                name="name",
+                aliases=("ren","rename"),
                 handler=self._cmd_rename,
                 min_args=1,
                 max_args=1,
                 description="更新显示名称",
+                legacy_aliases=("rename",),
             ),
             CommandSpec(
-                name="quit",
-                aliases=("quit", "q"),
-                handler=self._cmd_quit,
-                min_args=0,
-                max_args=0,
-                description="关闭服务器",
-            ),
-            CommandSpec(
-                name="source",
-                aliases=("source", "s"),
-                handler=self._cmd_source,
-                min_args=1,
-                max_args=1,
-                description="从文件执行批量命令",
-            ),
-            CommandSpec(
-                name="print-speed",
-                aliases=("printspeed", "speed", "ps"),
+                name="speed",
+                aliases=("ps",),
                 handler=self._cmd_set_print_speed,
                 min_args=1,
                 max_args=1,
                 description="调整默认打印速度 (毫秒)",
+                legacy_aliases=("printspeed", "print-speed"),
             ),
             CommandSpec(
-                name="toggle-typewriting",
-                aliases=("toggle-typewriting", "tt"),
+                name="typewrite",
+                aliases=("tt",),
                 handler=self._cmd_toggle_typewriting,
-                min_args=0,
-                max_args=0,
                 description="切换 typewriting 效果",
+                legacy_aliases=("toggle-typewriting",),
             ),
             CommandSpec(
-                name="toggle-typewriting-scheme",
-                aliases=("toggle-typewriting-scheme", "tts"),
+                name="scheme",
+                aliases=("ts",),
                 handler=self._cmd_toggle_typewriting_scheme,
-                min_args=0,
-                max_args=0,
                 description="在拼音与注音之间切换打字机模式",
+                legacy_aliases=("toggle-typewriting-scheme",),
             ),
             CommandSpec(
-                name="toggle-autopause",
-                aliases=("toggle-autopause", "ta"),
+                name="autopause",
+                aliases=("ta",),
                 handler=self._cmd_toggle_autopause,
-                min_args=0,
-                max_args=0,
                 description="切换 autopause 模式",
+                legacy_aliases=("toggle-autopause",),
+            ),
+            CommandSpec(
+                name="quotes",
+                aliases=("tq",),
+                handler=self._cmd_toggle_quotes,
+                description="切换是否自动为消息添加双引号",
+                legacy_aliases=("toggle-quotes",),
+            ),
+            CommandSpec(
+                name="paren",
+                aliases=("tp",),
+                handler=self._cmd_parentheses,
+                max_args=1,
+                description="切换圆括号包装，或使用 'once' 对下一条消息生效",
+                legacy_aliases=("parentheses",),
+            ),
+            CommandSpec(
+                name="brackets",
+                aliases=("ub", "tub"),
+                handler=self._cmd_toggle_username_brackets,
+                description="切换是否使用【】包裹用户名",
+                legacy_aliases=("toggle-username-brackets",),
+            ),
+            CommandSpec(
+                name="source",
+                aliases=("src", "load"),
+                handler=self._cmd_source,
+                min_args=1,
+                max_args=1,
+                description="从文件执行批量命令",
+                legacy_aliases=("s",),
             ),
         )
 
+        self._command_specs = commands
+
         registry: dict[str, CommandSpec] = {}
         for spec in commands:
-            for alias in spec.aliases:
+            all_aliases = {spec.name, *spec.aliases, *spec.legacy_aliases}
+            for alias in all_aliases:
                 registry[alias.lower()] = spec
         return registry
 
@@ -333,7 +369,17 @@ class EchoServer:
             return self._run_command(spec, args)
 
         self.console.print("[red]这个命令怕是不存在吧……[/red]")
-        self.console.print("[blue]tips: 如果你想要发消息，请不要用 '/' 开头！[/blue]")
+        suggestions = self._suggest_commands(action)
+        if suggestions:
+            self.console.print(
+                "[blue]你是想输入 {} 吗？[/blue]".format(
+                    "、".join(suggestions)
+                )
+            )
+        else:
+            self.console.print("[blue]tips: 如果你想要发消息，请不要用 '/' 开头！[/blue]")
+        prefix = self.config["command_prefix"]
+        self.console.print(f"[blue]输入 {prefix}help 查看命令列表。[/blue]")
         return True
 
     def _run_command(self, spec: CommandSpec, args: list[str]) -> bool:
@@ -409,6 +455,147 @@ class EchoServer:
         )
         return True
 
+    def _cmd_toggle_quotes(self, _args: list[str]) -> bool:
+        self.config["auto_quotes"] = not self.config.get("auto_quotes", True)
+        self._persist_config()
+        self.console.print(
+            f"[green]自动双引号包装当前状态: {self.config['auto_quotes']}[/green]"
+        )
+        return True
+
+    def _cmd_parentheses(self, args: list[str]) -> bool:
+        if not args:
+            self.config["auto_parentheses"] = not self.config.get("auto_parentheses", False)
+            self._persist_config()
+            self.console.print(
+                f"[green]圆括号包装状态已经变更为 {self.config['auto_parentheses']}[/green]"
+            )
+            return True
+
+        option = args[0].lower()
+        if option in {"once", "one", "next"}:
+            self._parentheses_once = True
+            self.console.print("[green]下一条消息将附加圆括号。[/green]")
+            return True
+
+        if option in {"on", "off"}:
+            self.config["auto_parentheses"] = option == "on"
+            self._persist_config()
+            self.console.print(
+                f"[green]圆括号包装状态已经设置为 {self.config['auto_parentheses']}[/green]"
+            )
+            return True
+
+        self.console.print("[red]参数无效，可使用 on/off 或 once。[/red]")
+        return True
+
+    def _cmd_toggle_username_brackets(self, _args: list[str]) -> bool:
+        self.config["username_brackets"] = not self.config.get("username_brackets", False)
+        self._persist_config()
+        self.console.print(
+            f"[green]用户名【】包裹状态: {self.config['username_brackets']}[/green]"
+        )
+        return True
+
+    def _cmd_help(self, args: list[str]) -> bool:
+        prefix = self.config["command_prefix"]
+
+        if args:
+            query = args[0].lower()
+            spec = self._command_registry.get(query)
+            if spec is None:
+                self.console.print("[red]没有找到这个命令。[/red]")
+                suggestions = self._suggest_commands(query)
+                if suggestions:
+                    self.console.print(
+                        "[blue]你是想输入 {} 吗？[/blue]".format("、".join(suggestions))
+                    )
+                else:
+                    self.console.print(f"[blue]输入 {prefix}help 查看全部命令。[/blue]")
+                return True
+
+            self._print_command_details(spec, prefix)
+            return True
+
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("命令")
+        table.add_column("常用别名")
+        table.add_column("参数")
+        table.add_column("说明", overflow="fold")
+
+        for spec in self._command_specs:
+            table.add_row(
+                f"{prefix}{spec.name}",
+                self._format_aliases(spec.aliases, prefix),
+                self._argument_hint(spec),
+                spec.description or "-",
+            )
+
+        self.console.print(table)
+        if any(spec.legacy_aliases for spec in self._command_specs):
+            self.console.print("[dim]提示: 历史命令仍可用，但推荐优先使用表格中的短别名。[/dim]")
+        return True
+
+    @staticmethod
+    def _format_aliases(aliases: tuple[str, ...], prefix: str) -> str:
+        if not aliases:
+            return "-"
+        return ", ".join(f"{prefix}{alias}" for alias in aliases)
+
+    @staticmethod
+    def _argument_hint(spec: CommandSpec) -> str:
+        minimum = spec.min_args
+        maximum = spec.max_args
+        if maximum == 0:
+            return "无"
+        if maximum is None:
+            return f">={minimum}"
+        if minimum == 0 and maximum == 1:
+            return "可选"
+        if minimum == maximum:
+            return str(minimum)
+        return f"{minimum}-{maximum}"
+
+    def _print_command_details(self, spec: CommandSpec, prefix: str) -> None:
+        usage = prefix + spec.name
+        if spec.max_args == 1:
+            placeholder = "[value]" if spec.min_args == 0 else "<value>"
+            usage = f"{usage} {placeholder}"
+        elif spec.max_args not in (0, None):
+            usage = f"{usage} <args>"
+        elif spec.max_args is None:
+            usage = f"{usage} <...>"
+
+        self.console.print(f"[cyan]{usage}[/cyan] - {spec.description or '无描述'}")
+
+        alias_text = self._format_aliases(spec.aliases, prefix)
+        if alias_text != "-":
+            self.console.print(f"[white]常用别名[/white]: {alias_text}")
+
+        if spec.legacy_aliases:
+            legacy_aliases = ", ".join(f"{prefix}{alias}" for alias in spec.legacy_aliases)
+            self.console.print(f"[white]历史别名[/white]: {legacy_aliases}")
+
+        self.console.print(f"[white]参数[/white]: {self._argument_hint(spec)}")
+
+    def _suggest_commands(self, token: str, limit: int = 3) -> list[str]:
+        if not token:
+            return []
+        candidates = list(self._command_registry.keys())
+        matches = get_close_matches(token, candidates, n=limit, cutoff=0.6)
+        prefix = self.config["command_prefix"]
+        seen: set[str] = set()
+        suggestions: list[str] = []
+        for match in matches:
+            spec = self._command_registry.get(match)
+            if spec is None:
+                continue
+            command_name = f"{prefix}{spec.name}"
+            if command_name not in seen:
+                suggestions.append(command_name)
+                seen.add(command_name)
+        return suggestions
+
     @staticmethod
     def _literal_message_from_command(command: str, prefix: str) -> Optional[str]:
         if not prefix:
@@ -446,6 +633,23 @@ class EchoServer:
         except FileNotFoundError:
             self.console.print("[red]这个文件怕是不存在吧！已终止后续的解析！[/]")
 
+    @staticmethod
+    def _is_wrapped(text: str, left: str, right: str) -> bool:
+        return len(text) >= len(left) + len(right) and text.startswith(left) and text.endswith(right)
+
+    def _decorate_outgoing_text(self, text: str) -> str:
+        result = text
+        if self.config.get("auto_quotes", True) and not self._is_wrapped(result, '"', '"'):
+            result = f'"{result}"'
+
+        apply_parentheses = self.config.get("auto_parentheses", False) or self._parentheses_once
+        if apply_parentheses and not self._is_wrapped(result, "(", ")"):
+            result = f"({result})"
+
+        # one-time flag only applies to the immediate message
+        self._parentheses_once = False
+        return result
+
     def _enqueue_message(self, text: str) -> None:
         syntax = parse_message(text)
         syntax = apply_autopause(self.config, syntax)
@@ -454,8 +658,9 @@ class EchoServer:
         self._events.append({"action": "message_data", "data": payload, "delay": delay})
 
     def _send_literal_message(self, text: str) -> None:
-        self.console.print(f"发送文字消息: {text}")
-        self._enqueue_message(text)
+        decorated = self._decorate_outgoing_text(text)
+        self.console.print(f"发送文字消息: {decorated}")
+        self._enqueue_message(decorated)
 
     def _connection_is_closed(self, websocket: Any) -> bool:
         closed_attr = getattr(websocket, "closed", None)

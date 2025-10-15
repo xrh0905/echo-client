@@ -25,6 +25,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "autopausestr": ",，.。;；:：!！",
     "autopausetime": 10,
     "print_speed": 10,
+    "auto_quotes": True,
+    "auto_parentheses": False,
+    "username_brackets": True,
 }
 
 

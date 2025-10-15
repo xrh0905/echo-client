@@ -10,6 +10,7 @@
 - **交互式命令行体验**：基于 `prompt-toolkit` 的彩色终端，内置快捷键和命令提示。
 - **富文本格式与快速标记**：支持 Markdown 强调语法与 `@` 前缀快捷码，快速叠加粗体、斜体、颜色、字号、类名等效果。
 - **Typewriting 与自动停顿**：按需生成打字机效果与自动插入停顿帧，让字幕播放更自然。
+- **可配置的消息修饰**：可自动为文本添加引号、括号，并为用户名套上【】以突出显示。
 - **批量脚本执行**：通过 `/source` 命令导入 `message_sample.txt` 等脚本文件，实现自动播报。
 - **跨平台打包**：内置 PyInstaller spec，可将工具封装为单文件或单目录可执行程序。
 
@@ -56,12 +57,15 @@
 | `username` | `str` | `Someone` | 推送给 Echo-live 的默认用户名，可交互命令 `/ren` 修改。|
 | `host` | `str` | `127.0.0.1` | WebSocket 监听地址，跨设备使用请改为 `0.0.0.0`。|
 | `port` | `int` | `3000` | WebSocket 监听端口。|
-| `typewriting` | `bool` | `true` | 是否启用打字机同步。`/tt` 可切换。|
-| `typewriting_scheme` | `str` | `pinyin` | 打字机模式，支持 `pinyin`（拼音）与 `zhuyin`（注音），`/tts` 可切换。|
-| `autopause` | `bool` | `false` | 自动插入停顿标记。`/ta` 可切换。|
+| `typewriting` | `bool` | `true` | 是否启用打字机同步。`/typewrite`（或 `/tt`）可切换。|
+| `typewriting_scheme` | `str` | `pinyin` | 打字机模式，支持 `pinyin`（拼音）与 `zhuyin`（注音），`/scheme`（或 `/tts`）可切换。|
+| `autopause` | `bool` | `false` | 自动插入停顿标记。`/autopause`（或 `/ta`）可切换。|
 | `autopausestr` | `str` | `,，.。;；:：!！` | 触发停顿的字符集合。|
 | `autopausetime` | `int` | `10` | 停顿时长单位，取决于打印速度。|
-| `print_speed` | `int` | `10` | 默认打印速度（毫秒/字符），`/ps <value>` 可调整。|
+| `print_speed` | `int` | `10` | 默认打印速度（毫秒/字符），`/speed <value>`（或 `/ps`）可调整。|
+| `auto_quotes` | `bool` | `true` | 是否自动为每条消息添加一对双引号，`/quotes`（或 `/tq`）可切换。|
+| `auto_parentheses` | `bool` | `false` | 是否自动用圆括号包裹消息，可用 `/paren` 切换或 `/paren once` 仅对下一条生效。|
+| `username_brackets` | `bool` | `false` | 是否使用 `【】` 包裹用户名，`/brackets`（或 `/ub`）可切换。|
 
 每次通过命令修改都会即时落盘。手动编辑文件后无需重启即可生效（下一条消息时加载）。
 
@@ -73,13 +77,17 @@
 
 | 命令 | 别名 | 描述 |
 | --- | --- | --- |
-| `/rename <name>` | `/ren`, `/name` | 更新默认显示名称并保存配置。|
-| `/speed <ms>` | `/ps`, `/printspeed` | 设置默认打印速度（毫秒/字符）。|
-| `/tt` | `/toggle-typewriting` | 切换 Typewriting 效果。|
-| `/tts` | `/toggle-typewriting-scheme` | 在拼音与注音模式之间切换 Typewriting。|
-| `/ta` | `/toggle-autopause` | 切换自动停顿。|
-| `/s <file>` | `/source` | 按行执行脚本文件中的指令。|
-| `/q` | `/quit` | 关闭服务器并退出程序。|
+| `/help [command]` | `/h`, `/?` | 显示命令列表或查看某个命令的详细说明。|
+| `/quit` | `/q`, `/exit` | 关闭服务器并退出程序。|
+| `/name <name>` | `/ren` | 更新默认显示名称并保存配置。|
+| `/speed <ms>` | `/ps` | 设置默认打印速度（毫秒/字符）。|
+| `/typewrite` | `/tt` | 切换 Typewriting 效果。|
+| `/scheme` | `/tts` | 在拼音与注音模式之间切换 Typewriting。|
+| `/autopause` | `/ta` | 切换自动停顿。|
+| `/quotes` | `/tq` | 切换是否自动为消息添加双引号。|
+| `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
+| `/brackets` | `/ub`, `/tub` | 切换是否用 `【】` 包裹用户名。|
+| `/source <file>` | `/src`, `/load` | 按行执行脚本文件中的指令。|
 
 > 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
 
@@ -114,6 +122,8 @@ echo-client 同时支持两套叠加格式：
 ```text
 /s message_sample.txt
 ```
+
+> 默认会为消息自动添加一对双引号；可通过命令或配置关闭，或进一步叠加圆括号包装。
 
 ## 🤖 自动停顿与打字机
 
@@ -153,7 +163,7 @@ poetry run echo-client
 - **客户端无法连接**：确认 Echo-live 的 `websocket_url` 是否指向本机监听地址，并检查端口占用问题。
 - **消息没有格式效果**：确保 Echo-live 版本支持传入的字段；`@` 快捷码与 Markdown 可叠加使用。
 - **打字机太慢/太快**：通过 `/ps <毫秒>` 即时调整打印速度，或修改 `config.yaml` 后重启。
-- **想要批量发送**：将指令写入文本文件后使用 `/s your_file.txt`。
+- **想要批量发送**：将指令写入文本文件后使用 `/source your_file.txt`（亦可使用别名 `/src`）。
 
 欢迎通过 issue、讨论区或 PR 分享使用心得与改进建议！
 
