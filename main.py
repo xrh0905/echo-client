@@ -66,7 +66,6 @@ class EchoServer:
         self._live_display_visibility: dict[int, bool] = {}
         self._graceful_disconnect_requests: dict[int, bool] = {}
         self._parentheses_once: bool = False
-        self._interrupt_warning_shown: bool = False
 
     def _build_command_registry(self) -> dict[str, CommandSpec]:
         """Create the lookup table that powers console commands."""
@@ -444,15 +443,9 @@ class EchoServer:
                 break
             except KeyboardInterrupt:
                 if self.config.get("inhibit_ctrl_c", True):
-                    if not self._interrupt_warning_shown:
-                        self.console.print(
-                            "[yellow]检测到 Ctrl+C，但当前启用了退出保护；请使用 /nocc 关闭保护或使用 /quit 正常退出。[/yellow]"
-                        )
-                        self._interrupt_warning_shown = True
-                    else:
-                        self.console.print(
-                            "[yellow]退出保护仍然开启，如需退出请使用 /quit 或 /nocc 关闭后再尝试 Ctrl+C。[/yellow]"
-                        )
+                    self.console.print(
+                        "[yellow]检测到 Ctrl+C，但当前启用了退出保护；请使用 /nocc 关闭保护或使用 /quit 正常退出。[/yellow]"
+                    )
                     continue
                 await self.shutdown()
                 break
