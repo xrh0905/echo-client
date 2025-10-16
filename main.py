@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import itertools
 import json
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import get_close_matches
@@ -65,6 +66,7 @@ class EchoServer:
         self._live_display_visibility: dict[int, bool] = {}
         self._graceful_disconnect_requests: dict[int, bool] = {}
         self._parentheses_once: bool = False
+        self._interrupt_warning_shown: bool = False
 
     def _build_command_registry(self) -> dict[str, CommandSpec]:
         """Create the lookup table that powers console commands."""
@@ -90,6 +92,16 @@ class EchoServer:
             if server._parentheses_once:
                 base += "；下一条临时开启"
             return base
+
+        def nocc_status(server: "EchoServer") -> str:
+            return "开启" if server.config.get("inhibit_ctrl_c", True) else "关闭"
+
+        def suffix_status(server: "EchoServer") -> str:
+            if not server.config.get("auto_suffix", True):
+                return "关闭"
+            value = str(server.config.get("auto_suffix_value", "喵"))
+            display = value if value else "(空)"
+            return f"开启（{display}）"
 
         commands = (
             CommandSpec(
@@ -161,6 +173,15 @@ class EchoServer:
                 status_getter=bool_status("auto_quotes", True),
             ),
             CommandSpec(
+                name="suffix",
+                aliases=("tsuf",),
+                handler=self._cmd_suffix,
+                min_args=0,
+                max_args=1,
+                description="配置自动结尾字符，省略参数时切换开关，传入文本可设置字符",
+                status_getter=suffix_status,
+            ),
+            CommandSpec(
                 name="paren",
                 aliases=("tp",),
                 handler=self._cmd_parentheses,
@@ -183,6 +204,13 @@ class EchoServer:
                 handler=self._cmd_skip,
                 description="向客户端发送 echo_next 指令",
                 legacy_aliases=("next", "tn"),
+            ),
+            CommandSpec(
+                name="nocc",
+                aliases=("noc",),
+                handler=self._cmd_toggle_interrupt_guard,
+                description="切换 Ctrl+C 退出保护，关闭后 Ctrl+C 将直接终止程序",
+                status_getter=nocc_status,
             ),
             CommandSpec(
                 name="source",
@@ -409,7 +437,21 @@ class EchoServer:
                 if not self._handle_console_command(command.strip()):
                     await self.shutdown()
                     break
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
+                await self.shutdown()
+                break
+            except KeyboardInterrupt:
+                if self.config.get("inhibit_ctrl_c", True):
+                    if not self._interrupt_warning_shown:
+                        self.console.print(
+                            "[yellow]检测到 Ctrl+C，但当前启用了退出保护；请使用 /nocc 关闭保护或使用 /quit 正常退出。[/yellow]"
+                        )
+                        self._interrupt_warning_shown = True
+                    else:
+                        self.console.print(
+                            "[yellow]退出保护仍然开启，如需退出请使用 /quit 或 /nocc 关闭后再尝试 Ctrl+C。[/yellow]"
+                        )
+                    continue
                 await self.shutdown()
                 break
 
@@ -532,6 +574,35 @@ class EchoServer:
         )
         return True
 
+    def _cmd_suffix(self, args: list[str]) -> bool:
+        if not args:
+            new_state = not self.config.get("auto_suffix", True)
+            self.config["auto_suffix"] = new_state
+            self._persist_config()
+            state_label = "开启" if new_state else "关闭"
+            self.console.print(f"[green]自动结尾字符功能已{state_label}[/green]")
+            return True
+
+        option = args[0]
+        normalized = option.lower()
+        if normalized in {"on", "off"}:
+            new_state = normalized == "on"
+            self.config["auto_suffix"] = new_state
+            self._persist_config()
+            state_label = "开启" if new_state else "关闭"
+            self.console.print(f"[green]自动结尾字符功能已{state_label}[/green]")
+            return True
+
+        suffix_value = option
+        if not suffix_value:
+            self.console.print("[red]结尾字符不能为空。[/red]")
+            return True
+
+        self.config["auto_suffix_value"] = suffix_value
+        self._persist_config()
+        self.console.print(f"[green]自动结尾字符已设置为 {suffix_value}[/green]")
+        return True
+
     def _cmd_parentheses(self, args: list[str]) -> bool:
         if not args:
             self.config["auto_parentheses"] = not self.config.get("auto_parentheses", False)
@@ -563,6 +634,16 @@ class EchoServer:
         self._persist_config()
         self.console.print(
             f"[green]用户名【】包裹状态: {self.config['username_brackets']}[/green]"
+        )
+        return True
+
+    def _cmd_toggle_interrupt_guard(self, _args: list[str]) -> bool:
+        self.config["inhibit_ctrl_c"] = not self.config.get("inhibit_ctrl_c", True)
+        self._persist_config()
+        state_label = "开启" if self.config["inhibit_ctrl_c"] else "关闭"
+        self._interrupt_warning_shown = False
+        self.console.print(
+            f"[green]Ctrl+C 退出保护当前状态: {state_label}[/green]"
         )
         return True
 
@@ -744,6 +825,36 @@ class EchoServer:
         self._parentheses_once = False
         return result
 
+    def _apply_auto_suffix(self, text: str) -> str:
+        if not isinstance(text, str) or text == "":
+            return text
+        if not self.config.get("auto_suffix", True):
+            return text
+
+        suffix = str(self.config.get("auto_suffix_value", "喵"))
+        if not suffix:
+            return text
+
+        trimmed = text.rstrip()
+        if not trimmed:
+            return text
+
+        if trimmed.endswith(suffix):
+            return text
+
+        if not any(self._is_semantic_character(ch) for ch in trimmed):
+            return text
+
+        trailing = text[len(trimmed):]
+        return f"{trimmed}{suffix}{trailing}"
+
+    @staticmethod
+    def _is_semantic_character(char: str) -> bool:
+        if char.isalnum():
+            return True
+        category = unicodedata.category(char)
+        return bool(category) and category[0] in {"L", "N", "S"}
+
     def _enqueue_payload(
         self,
         payload: str,
@@ -774,7 +885,8 @@ class EchoServer:
         )
 
     def _send_literal_message(self, text: str) -> None:
-        decorated = self._decorate_outgoing_text(text)
+        enriched = self._apply_auto_suffix(text)
+        decorated = self._decorate_outgoing_text(enriched)
         self.console.print(f"发送文字消息: {decorated}")
         self._enqueue_message(decorated)
 

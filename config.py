@@ -28,6 +28,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_quotes": True,
     "auto_parentheses": False,
     "username_brackets": True,
+    "inhibit_ctrl_c": True,
+    "auto_suffix": True,
+    "auto_suffix_value": "喵",
 }
 
 
