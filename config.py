@@ -15,7 +15,7 @@ from rich.console import Console
 CONFIG_FILENAME = "config.yaml"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "command_prefix": "/",
+    "command_prefix": "Someone",
     "username": "Someone",
     "host": "127.0.0.1",
     "port": 3000,
@@ -29,7 +29,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_parentheses": False,
     "username_brackets": True,
     "inhibit_ctrl_c": True,
-    "auto_suffix": True,
+    "auto_suffix": False,
     "auto_suffix_value": "喵",
 }
 
