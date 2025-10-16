@@ -78,7 +78,7 @@ class EchoServer:
             return _status
 
         def username_status(server: "EchoServer") -> str:
-            value = str(server.config.get("username", "/")).strip()
+            value = str(server.config.get("username", "Someone")).strip()
             return value or "(空)"
 
         def speed_status(server: "EchoServer") -> str:
@@ -177,8 +177,8 @@ class EchoServer:
                 aliases=("tsuf",),
                 handler=self._cmd_suffix,
                 min_args=0,
-                max_args=1,
-                description="配置自动结尾字符，省略参数时切换开关，传入文本可设置字符",
+                max_args=None,
+                description="配置自动结尾字符，省略参数时切换开关，on/off 指定状态，其他内容将作为新的结尾文本",
                 status_getter=suffix_status,
             ),
             CommandSpec(
@@ -209,12 +209,14 @@ class EchoServer:
                 name="nocc",
                 aliases=("noc",),
                 handler=self._cmd_toggle_interrupt_guard,
-                description="切换 Ctrl+C 退出保护，关闭后 Ctrl+C 将直接终止程序",
+                min_args=0,
+                max_args=1,
+                description="配置 Ctrl+C 退出保护，省略参数时切换开关，可用 on/off 显式设置",
                 status_getter=nocc_status,
             ),
             CommandSpec(
                 name="source",
-                aliases=("src", "load"),
+                aliases=("src", "load", "script"),
                 handler=self._cmd_source,
                 min_args=1,
                 max_args=1,
@@ -583,7 +585,7 @@ class EchoServer:
             self.console.print(f"[green]自动结尾字符功能已{state_label}[/green]")
             return True
 
-        option = args[0]
+        option = " ".join(args).strip()
         normalized = option.lower()
         if normalized in {"on", "off"}:
             new_state = normalized == "on"
@@ -637,10 +639,19 @@ class EchoServer:
         )
         return True
 
-    def _cmd_toggle_interrupt_guard(self, _args: list[str]) -> bool:
-        self.config["inhibit_ctrl_c"] = not self.config.get("inhibit_ctrl_c", True)
+    def _cmd_toggle_interrupt_guard(self, args: list[str]) -> bool:
+        if args:
+            option = args[0].strip().lower()
+            if option not in {"on", "off"}:
+                self.console.print("[red]无效参数，可使用 on 或 off。[/red]")
+                return True
+            new_state = option == "on"
+        else:
+            new_state = not self.config.get("inhibit_ctrl_c", True)
+
+        self.config["inhibit_ctrl_c"] = new_state
         self._persist_config()
-        state_label = "开启" if self.config["inhibit_ctrl_c"] else "关闭"
+        state_label = "开启" if new_state else "关闭"
         self._interrupt_warning_shown = False
         self.console.print(
             f"[green]Ctrl+C 退出保护当前状态: {state_label}[/green]"

@@ -90,11 +90,11 @@
 | `/scheme` | `/ts` | 在拼音与注音模式之间切换 Typewriting。|
 | `/autopause` | `/ta` | 切换自动停顿。|
 | `/quotes` | `/tq` | 切换是否自动为消息添加双引号。|
-| `/suffix [on|off|文本]` | `/tsuf` | 无参时切换自动结尾；`on/off` 指定状态；传文本则更新结尾字符。|
+| `/suffix [on|off|文本…]` | `/tsuf` | 无参时切换自动结尾；`on/off` 指定状态；其余内容将作为新的结尾文本，可包含空格。|
+| `/nocc [on|off]` | `/noc` | 无参时切换 Ctrl+C 退出保护；可用 `on/off` 显式设置状态。|
 | `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
 | `/brackets` | `/ub`, `/tub` | 切换是否用 `【】` 包裹用户名。|
 | `/skip` | `/cancel` | 立即广播 `echo_next` 指令，促使对话框播放下一条消息。|
-| `/nocc` | `/noc` | 切换 Ctrl+C 退出保护，关闭后终端 `Ctrl+C` 会立即终止程序。|
 | `/source <file>` | `/src`, `/load` | 按行执行脚本文件中的指令。|
 
 > 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
