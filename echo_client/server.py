@@ -52,6 +52,7 @@ class EchoServer:
         self._sigint_suppressed = False
         self._command_catalog: CommandCatalog | None = None
         self._command_specs: tuple[CommandSpec, ...] = ()
+        self._webui_server: Any | None = None
         self._sync_sigint_guard()
         self._refresh_command_catalog()
 
@@ -72,6 +73,11 @@ class EchoServer:
         self._sync_sigint_guard()
         host = self.config["host"]
         port = self.config["port"]
+        
+        # Start WebUI server if enabled
+        if self.config.get("enable_webui", False):
+            await self._start_webui_server()
+        
         self._server = await websockets.serve(self._handle_client, host, port)
 
         self.console.print(
@@ -89,9 +95,51 @@ class EchoServer:
         if self._server is None:
             return
         self.console.print("[yellow]正在关闭服务器……[/yellow]")
+        
+        # Stop WebUI server if running
+        if self._webui_server is not None:
+            await self._stop_webui_server()
+        
         self._server.close()
         await self._server.wait_closed()
         self._restore_sigint_guard()
+
+    async def _start_webui_server(self) -> None:
+        """Start the WebUI HTTP/WebSocket server."""
+        try:
+            from .echo_webui import WebUIServer
+            
+            host = self.config.get("host", "127.0.0.1")
+            port = self.config.get("port", 3000)
+            webui_root = self.config.get("webui_root", "echoliveui")
+            save_endpoint = self.config.get("webui_save_endpoint", "/api/save")
+            websocket_path = self.config.get("webui_websocket_path", "/ws")
+            
+            self._webui_server = WebUIServer(
+                host=host,
+                port=port,
+                webui_root=webui_root,
+                save_endpoint=save_endpoint,
+                websocket_path=websocket_path,
+            )
+            await self._webui_server.start()
+            self.console.print(
+                f"[green]WebUI 服务器已启动在 http://{host}:{port}[/green]"
+            )
+        except Exception as e:
+            self.console.print(f"[red]启动 WebUI 服务器失败: {e}[/red]")
+            self._webui_server = None
+
+    async def _stop_webui_server(self) -> None:
+        """Stop the WebUI HTTP/WebSocket server."""
+        if self._webui_server is not None:
+            try:
+                await self._webui_server.stop()
+                self.console.print("[yellow]WebUI 服务器已停止[/yellow]")
+            except Exception as e:
+                self.console.print(f"[red]停止 WebUI 服务器时出错: {e}[/red]")
+            finally:
+                self._webui_server = None
 
     async def _handle_client(self, websocket: Any) -> None:
         client_id = next(self._client_ids)
@@ -490,6 +538,30 @@ class EchoServer:
         payload = json.dumps({"action": "echo_next", "data": {}}, ensure_ascii=False)
         self._enqueue_payload(payload, label="echo_next", description="触发 echo_next")
         self.console.print("[green]已加入 echo_next 指令（由 /skip 触发）[/green]")
+        return True
+
+    def _cmd_toggle_webui(self, args: list[str]) -> bool:
+        if args:
+            option = args[0].strip().lower()
+            if option not in {"on", "off"}:
+                self.console.print("[red]无效参数，可使用 on 或 off。[/red]")
+                return True
+            new_state = option == "on"
+        else:
+            new_state = not self.config.get("enable_webui", False)
+
+        self.config["enable_webui"] = new_state
+        self._persist_config()
+        state_label = "开启" if new_state else "关闭"
+        
+        if new_state:
+            self.console.print(
+                f"[green]WebUI 已{state_label}，请重启服务器以应用更改[/green]"
+            )
+        else:
+            self.console.print(
+                f"[yellow]WebUI 已{state_label}，请重启服务器以应用更改[/yellow]"
+            )
         return True
 
     def _cmd_help(self, args: list[str]) -> bool:
