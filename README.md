@@ -71,6 +71,7 @@
 | `auto_suffix` | `bool` | `true` | 是否自动为消息追加自定义结尾字符，`/suffix` 可切换或设置。|
 | `auto_suffix_value` | `str` | `喵` | 自动追加的结尾字符，`/suffix <字符>` 可修改。|
 | `inhibit_ctrl_c` | `bool` | `true` | 是否启用 `Ctrl+C` 退出保护，`/nocc` 可切换。|
+| `ctrl_shortcuts_enabled` | `bool` | `true` | 是否启用 `Ctrl+` 系列快捷插入，`/shortcuts` 可切换。|
 
 每次通过命令修改都会即时落盘。手动编辑文件后无需重启即可生效（下一条消息时加载）。
 
@@ -92,6 +93,7 @@
 | `/quotes` | `/tq` | 切换是否自动为消息添加双引号。|
 | `/suffix [on|off|文本…]` | `/tsuf` | 无参时切换自动结尾；`on/off` 指定状态；其余内容将作为新的结尾文本，可包含空格。|
 | `/nocc [on|off]` | `/noc` | 无参时切换 Ctrl+C 退出保护；可用 `on/off` 显式设置状态。|
+| `/shortcuts [on|off]` | `/tcs` | 无参时切换 Ctrl+ 快捷键插入；可用 `on/off` 显式设置状态。|
 | `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
 | `/brackets` | `/ub`, `/tub` | 切换是否用 `【】` 包裹用户名。|
 | `/skip` | `/cancel` | 立即广播 `echo_next` 指令，促使对话框播放下一条消息。|
@@ -105,6 +107,8 @@
 - `Ctrl+B` / `Ctrl+I` / `Ctrl+U` / `Ctrl+D`：插入 `@b`/`@i`/`@u`/`@s` 快速格式码。
 - `Ctrl+↑` / `Ctrl+↓`：插入 `@+` / `@-` 调整字号。
 - `Ctrl+Space`：插入 `@r` 重置临时样式。
+
+在需要避免误触 Ctrl 系列快捷键时，可使用 `/shortcuts off` 暂时停用它们，完成后再 `/shortcuts on` 重新启用。
 
 ## 📝 消息格式
 

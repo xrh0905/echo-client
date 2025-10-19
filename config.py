@@ -31,6 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "inhibit_ctrl_c": True,
     "auto_suffix": False,
     "auto_suffix_value": "喵",
+    "ctrl_shortcuts_enabled": False,
 }
 
 

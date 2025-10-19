@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, Optional
-
 import websockets
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
@@ -101,6 +100,9 @@ class EchoServer:
             value = str(server.config.get("auto_suffix_value", "喵"))
             display = value if value else "(空)"
             return f"开启（{display}）"
+
+        def shortcuts_status(server: "EchoServer") -> str:
+            return "开启" if server.config.get("ctrl_shortcuts_enabled", True) else "关闭"
 
         commands = (
             CommandSpec(
@@ -212,6 +214,15 @@ class EchoServer:
                 max_args=1,
                 description="配置 Ctrl+C 退出保护，省略参数时切换开关，可用 on/off 显式设置",
                 status_getter=nocc_status,
+            ),
+            CommandSpec(
+                name="shortcuts",
+                aliases=("tcs",),
+                handler=self._cmd_toggle_ctrl_shortcuts,
+                min_args=0,
+                max_args=1,
+                description="配置 Ctrl+ 快捷键插入，省略参数时切换开关，可用 on/off 显式设置",
+                status_getter=shortcuts_status,
             ),
             CommandSpec(
                 name="source",
@@ -651,6 +662,24 @@ class EchoServer:
         )
         return True
 
+    def _cmd_toggle_ctrl_shortcuts(self, args: list[str]) -> bool:
+        if args:
+            option = args[0].strip().lower()
+            if option not in {"on", "off"}:
+                self.console.print("[red]无效参数，可使用 on 或 off。[/red]")
+                return True
+            new_state = option == "on"
+        else:
+            new_state = not self.config.get("ctrl_shortcuts_enabled", True)
+
+        self.config["ctrl_shortcuts_enabled"] = new_state
+        self._persist_config()
+        state_label = "开启" if new_state else "关闭"
+        self.console.print(
+            f"[green]Ctrl+ 快捷插入当前状态: {state_label}[/green]"
+        )
+        return True
+
     def _cmd_skip(self, args: list[str]) -> bool:
         if args:
             self.console.print("[yellow]/skip 不需要参数，已忽略额外输入。[/yellow]")
@@ -944,6 +973,8 @@ class EchoServer:
         for key_seq, payload in bindings.items():
             @key_bindings.add(key_seq)
             def _handler(event: KeyPressEvent, payload: str = payload) -> None:
+                if not self.config.get("ctrl_shortcuts_enabled", True):
+                    return
                 event.current_buffer.insert_text(payload)
 
         return key_bindings
