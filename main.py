@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import itertools
 import json
+import signal
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -61,6 +62,10 @@ class EchoServer:
         self._live_display_visibility: dict[int, bool] = {}
         self._graceful_disconnect_requests: dict[int, bool] = {}
         self._parentheses_once: bool = False
+        self._sigint_guard_active = False
+        self._sigint_original: Any | None = None
+        self._sigint_suppressed = False
+        self._sync_sigint_guard()
 
     def _build_command_registry(self) -> dict[str, CommandSpec]:
         """Create the lookup table that powers console commands."""
@@ -233,6 +238,7 @@ class EchoServer:
 
     async def run(self) -> None:
         """Start the websocket server and the console input loop."""
+        self._sync_sigint_guard()
         host = self.config["host"]
         port = self.config["port"]
         self._server = await websockets.serve(self._handle_client, host, port)
@@ -254,6 +260,7 @@ class EchoServer:
         self.console.print("[yellow]正在关闭服务器……[/yellow]")
         self._server.close()
         await self._server.wait_closed()
+        self._restore_sigint_guard()
 
     async def _handle_client(self, websocket: Any) -> None:
         client_id = next(self._client_ids)
@@ -425,23 +432,20 @@ class EchoServer:
         while True:
             try:
                 command = await self._prompt_command("请输入命令: ")
+                if not self._handle_console_command(command.strip()):
+                    await self.shutdown()
+                    break
             except asyncio.CancelledError:
                 raise
             except EOFError:
-                await self.shutdown()
-                break
+                if not self._handle_keyboard_interrupt():
+                    await self.shutdown()
+                    break
             except KeyboardInterrupt:
-                if self.config.get("inhibit_ctrl_c", True):
-                    self.console.print(
-                        "[yellow]检测到 Ctrl+C，但当前启用了退出保护；请使用 /nocc 关闭保护或使用 /quit 正常退出。[/yellow]"
-                    )
-                    continue
-                await self.shutdown()
-                break
-
-            if not self._handle_console_command(command.strip()):
-                await self.shutdown()
-                break
+                if not self._handle_keyboard_interrupt():
+                    await self.shutdown()
+                    break
+            
 
     async def _prompt_command(self, prompt: str) -> str:
         """Read a line from stdin without relying on prompt_toolkit."""
@@ -643,8 +647,8 @@ class EchoServer:
 
         self.config["inhibit_ctrl_c"] = new_state
         self._persist_config()
+        self._sync_sigint_guard()
         state_label = "开启" if new_state else "关闭"
-        self._interrupt_warning_shown = False
         self.console.print(
             f"[green]Ctrl+C 退出保护当前状态: {state_label}[/green]"
         )
@@ -926,6 +930,69 @@ class EchoServer:
         self.console.print(
             f"客户端{client_id}: 实时展示 {state_label}{vanish_hint}{extra}"
         )
+
+    # --- Ctrl+C guard management ---------------------------------------------------
+
+    def _sync_sigint_guard(self) -> None:
+        if self.config.get("inhibit_ctrl_c", True):
+            self._install_sigint_guard()
+        else:
+            self._restore_sigint_guard()
+
+    def _install_sigint_guard(self) -> None:
+        if self._sigint_guard_active:
+            return
+        try:
+            self._sigint_original = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, self._sigint_handler)
+            self._sigint_guard_active = True
+            self._sigint_suppressed = False
+        except (ValueError, OSError):
+            self._sigint_original = None
+            self._sigint_guard_active = False
+
+    def _restore_sigint_guard(self) -> None:
+        if not self._sigint_guard_active:
+            return
+        handler = self._sigint_original if self._sigint_original is not None else signal.SIG_DFL
+        try:
+            signal.signal(signal.SIGINT, handler)
+        except (ValueError, OSError):
+            pass
+        self._sigint_guard_active = False
+        self._sigint_original = None
+        self._sigint_suppressed = False
+
+    def _sigint_handler(self, signum: int, frame: Any) -> None:  # pragma: no cover - signal path
+        if self.config.get("inhibit_ctrl_c", True):
+            self._sigint_suppressed = True
+            self._warn_ctrl_c_guard()
+            return
+
+        previous = self._sigint_original
+        self._restore_sigint_guard()
+        if callable(previous):
+            previous(signum, frame)
+            return
+        if previous == signal.SIG_IGN:
+            return
+        raise KeyboardInterrupt
+
+    def _warn_ctrl_c_guard(self) -> None:
+        self.console.print(
+            "[yellow]检测到 Ctrl+C，但当前启用了退出保护；请使用 /nocc 关闭保护或使用 /quit 正常退出。[/yellow]"
+        )
+
+    def _handle_keyboard_interrupt(self) -> bool:
+        if not self.config.get("inhibit_ctrl_c", True):
+            return False
+
+        if self._sigint_suppressed:
+            self._sigint_suppressed = False
+            return True
+
+        self._warn_ctrl_c_guard()
+        return True
 
 
 def main() -> None:
