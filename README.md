@@ -71,8 +71,85 @@
 | `auto_suffix` | `bool` | `true` | 是否自动为消息追加自定义结尾字符，`/suffix` 可切换或设置。|
 | `auto_suffix_value` | `str` | `喵` | 自动追加的结尾字符，`/suffix <字符>` 可修改。|
 | `inhibit_ctrl_c` | `bool` | `true` | 是否启用 `Ctrl+C` 退出保护，`/nocc` 可切换。|
+| `enable_webui` | `bool` | `false` | 是否启用 WebUI 服务器，`/webui` 可切换。启用后需重启服务器。|
+| `webui_root` | `str` | `echoliveui` | WebUI 静态文件根目录路径。|
+| `webui_save_endpoint` | `str` | `/api/save` | WebUI 配置保存 API 端点路径。|
+| `webui_websocket_path` | `str` | `/ws` | WebUI WebSocket 连接路径前缀。|
 
 每次通过命令修改都会即时落盘。手动编辑文件后无需重启即可生效（下一条消息时加载）。
+
+## 🌐 WebUI 功能
+
+echo-client 支持可选的 WebUI 服务器模块，提供基于 Web 的管理界面和 WebSocket 通信功能。
+
+### 启用 WebUI
+
+1. 使用命令切换 WebUI 状态：
+   ```
+   /webui on
+   ```
+   或通过配置文件设置 `enable_webui: true`
+
+2. 重启 echo-client 服务器以应用更改
+
+3. WebUI 将在与 WebSocket 服务器相同的端口（默认 3000）上运行
+
+### WebUI 特性
+
+- **静态文件服务**：自动提供 `echoliveui` 目录下的静态文件，默认以 `editor.html` 作为首页
+- **配置保存 API**：通过 POST `/api/save` 端点保存配置文件，支持动态创建目录
+- **WebSocket 通道**：支持多频道 WebSocket 通信，客户端可通过 `/ws/channel_name` 连接到特定频道
+- **消息广播**：
+  - `global` 频道的消息将广播到所有频道
+  - 其他频道的消息仅在该频道内广播
+- **自动心跳**：每 30 秒自动发送 ping 保持连接活跃
+
+### API 端点
+
+#### POST /api/save
+
+保存配置文件到指定目录。
+
+请求体示例：
+```json
+{
+  "name": "config.json",
+  "root": "/path/to/directory",
+  "data": {
+    "key": "value"
+  }
+}
+```
+
+响应示例：
+```json
+{
+  "success": true,
+  "message": "配置文件保存成功",
+  "path": "/path/to/directory/config.json"
+}
+```
+
+### WebSocket 协议
+
+WebUI 支持以下消息格式：
+
+```json
+{
+  "action": "hello|close|ping",
+  "from": {
+    "type": "live|history|server",
+    "uuid": "client-uuid"
+  },
+  "data": {},
+  "target": null
+}
+```
+
+- `live` 类型：对话框客户端
+- `history` 类型：历史记录浏览器
+- `server` 类型：编辑器客户端
+
 
 ## ⌨️ 命令与快捷键
 
@@ -92,6 +169,7 @@
 | `/quotes` | `/tq` | 切换是否自动为消息添加双引号。|
 | `/suffix [on|off|文本…]` | `/tsuf` | 无参时切换自动结尾；`on/off` 指定状态；其余内容将作为新的结尾文本，可包含空格。|
 | `/nocc [on|off]` | `/noc` | 无参时切换 Ctrl+C 退出保护；可用 `on/off` 显式设置状态。|
+| `/webui [on|off]` | `/web`, `/ui` | 无参时切换 WebUI 功能；`on/off` 显式设置状态；需重启服务器生效。|
 | `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
 | `/brackets` | `/ub`, `/tub` | 切换是否用 `【】` 包裹用户名。|
 | `/skip` | `/cancel` | 立即广播 `echo_next` 指令，促使对话框播放下一条消息。|

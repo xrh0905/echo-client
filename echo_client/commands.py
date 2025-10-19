@@ -126,6 +126,9 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
     def nocc_status(srv: "EchoServer") -> str:
         return "开启" if srv.config.get("inhibit_ctrl_c", True) else "关闭"
 
+    def webui_status(srv: "EchoServer") -> str:
+        return "开启" if srv.config.get("enable_webui", False) else "关闭"
+
     def suffix_status(srv: "EchoServer") -> str:
         if not srv.config.get("auto_suffix", True):
             return "关闭"
@@ -241,6 +244,15 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
             max_args=1,
             description="配置 Ctrl+C 退出保护，省略参数时切换开关，可用 on/off 显式设置",
             status_getter=nocc_status,
+        ),
+        CommandSpec(
+            name="webui",
+            aliases=("web", "ui"),
+            handler=server._cmd_toggle_webui,
+            min_args=0,
+            max_args=1,
+            description="配置 WebUI 功能，省略参数时切换开关，可用 on/off 显式设置",
+            status_getter=webui_status,
         ),
         CommandSpec(
             name="source",
