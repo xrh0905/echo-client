@@ -17,6 +17,9 @@ _MARKDOWN = MarkdownIt("commonmark")
 
 TYPEWRITING_SCHEMES = {"pinyin", "zhuyin"}
 DEFAULT_TYPEWRITING_SCHEME = "pinyin"
+EVENT_TOKENS: Dict[str, str] = {
+    "sh": "shout",
+}
 
 
 def _format_username(config: Dict[str, Any]) -> str:
@@ -112,6 +115,14 @@ def _apply_fast_formatting(text: str, base_style: Dict[str, Any]) -> List[Dict[s
     active_classes: List[str] = []
     buffer: List[str] = []
     segments: List[Dict[str, Any]] = []
+    pending_event: Optional[str] = None
+
+    def append_entry(entry: Dict[str, Any]) -> None:
+        nonlocal pending_event
+        if pending_event:
+            entry["event"] = pending_event
+            pending_event = None
+        segments.append(entry)
 
     def push_buffer() -> None:
         if not buffer:
@@ -123,7 +134,7 @@ def _apply_fast_formatting(text: str, base_style: Dict[str, Any]) -> List[Dict[s
         }
         if active_classes:
             entry["class"] = active_classes.copy()
-        segments.append(entry)
+        append_entry(entry)
         buffer.clear()
 
     index = 0
@@ -142,6 +153,17 @@ def _apply_fast_formatting(text: str, base_style: Dict[str, Any]) -> List[Dict[s
         if index + 1 >= length:
             buffer.append("@")
             index += 1
+            continue
+
+        event_matched = False
+        for marker, event_name in EVENT_TOKENS.items():
+            if text.startswith(marker, index + 1):
+                push_buffer()
+                pending_event = event_name
+                index += 1 + len(marker)
+                event_matched = True
+                break
+        if event_matched:
             continue
 
         code = text[index + 1]
@@ -198,7 +220,7 @@ def _apply_fast_formatting(text: str, base_style: Dict[str, Any]) -> List[Dict[s
                         emoji_entry["style"] = current_style.copy()
                     if active_classes:
                         emoji_entry["class"] = active_classes.copy()
-                    segments.append(emoji_entry)
+                    append_entry(emoji_entry)
                 index = closing + 1
         elif code == "<":
             pos = index + 2
@@ -226,6 +248,13 @@ def _apply_fast_formatting(text: str, base_style: Dict[str, Any]) -> List[Dict[s
             continue
 
     push_buffer()
+    if pending_event:
+        empty_entry: Dict[str, Any] = {"text": ""}
+        if current_style:
+            empty_entry["style"] = current_style.copy()
+        if active_classes:
+            empty_entry["class"] = active_classes.copy()
+        append_entry(empty_entry)
 
     if not segments:
         return [{"text": text, "style": base_style.copy()}]
