@@ -11,10 +11,8 @@ from dataclasses import dataclass, field
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, Optional
+
 import websockets
-from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
-from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.table import Table
 
@@ -56,10 +54,8 @@ class EchoServer:
         self._events: list[dict[str, Any]] = []
         self._client_ids = itertools.count(1)
         self._server: Any | None = None
-        self._input_session: PromptSession | None = None
         self._command_specs: tuple[CommandSpec, ...] = ()
         self._command_registry = self._build_command_registry()
-        self._key_bindings = self._build_key_bindings()
         self._heartbeat_counts: dict[int, int] = {}
         self._client_names: dict[int, str] = {}
         self._live_display_visibility: dict[int, bool] = {}
@@ -100,9 +96,6 @@ class EchoServer:
             value = str(server.config.get("auto_suffix_value", "喵"))
             display = value if value else "(空)"
             return f"开启（{display}）"
-
-        def shortcuts_status(server: "EchoServer") -> str:
-            return "开启" if server.config.get("ctrl_shortcuts_enabled", True) else "关闭"
 
         commands = (
             CommandSpec(
@@ -214,15 +207,6 @@ class EchoServer:
                 max_args=1,
                 description="配置 Ctrl+C 退出保护，省略参数时切换开关，可用 on/off 显式设置",
                 status_getter=nocc_status,
-            ),
-            CommandSpec(
-                name="shortcuts",
-                aliases=("tcs",),
-                handler=self._cmd_toggle_ctrl_shortcuts,
-                min_args=0,
-                max_args=1,
-                description="配置 Ctrl+ 快捷键插入，省略参数时切换开关，可用 on/off 显式设置",
-                status_getter=shortcuts_status,
             ),
             CommandSpec(
                 name="source",
@@ -438,17 +422,11 @@ class EchoServer:
             )
 
     async def _run_input_loop(self) -> None:
-        self._input_session = self._input_session or PromptSession(
-            key_bindings=self._key_bindings
-        )
-
         while True:
             try:
-                with patch_stdout(raw=True):
-                    command = await self._input_session.prompt_async("请输入命令: ")
-                if not self._handle_console_command(command.strip()):
-                    await self.shutdown()
-                    break
+                command = await self._prompt_command("请输入命令: ")
+            except asyncio.CancelledError:
+                raise
             except EOFError:
                 await self.shutdown()
                 break
@@ -460,6 +438,16 @@ class EchoServer:
                     continue
                 await self.shutdown()
                 break
+
+            if not self._handle_console_command(command.strip()):
+                await self.shutdown()
+                break
+
+    async def _prompt_command(self, prompt: str) -> str:
+        """Read a line from stdin without relying on prompt_toolkit."""
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.console.input, prompt)
 
     def _handle_console_command(self, command: str) -> bool:
         prefix = self.config["command_prefix"]
@@ -659,24 +647,6 @@ class EchoServer:
         self._interrupt_warning_shown = False
         self.console.print(
             f"[green]Ctrl+C 退出保护当前状态: {state_label}[/green]"
-        )
-        return True
-
-    def _cmd_toggle_ctrl_shortcuts(self, args: list[str]) -> bool:
-        if args:
-            option = args[0].strip().lower()
-            if option not in {"on", "off"}:
-                self.console.print("[red]无效参数，可使用 on 或 off。[/red]")
-                return True
-            new_state = option == "on"
-        else:
-            new_state = not self.config.get("ctrl_shortcuts_enabled", True)
-
-        self.config["ctrl_shortcuts_enabled"] = new_state
-        self._persist_config()
-        state_label = "开启" if new_state else "关闭"
-        self.console.print(
-            f"[green]Ctrl+ 快捷插入当前状态: {state_label}[/green]"
         )
         return True
 
@@ -956,28 +926,6 @@ class EchoServer:
         self.console.print(
             f"客户端{client_id}: 实时展示 {state_label}{vanish_hint}{extra}"
         )
-
-    def _build_key_bindings(self) -> KeyBindings:
-        bindings = {
-            "c-b": "@b",
-            "c-i": "@i",
-            "c-u": "@u",
-            "c-d": "@s",
-            "c-up": "@+",
-            "c-down": "@-",
-            "c-space": "@r",
-        }
-
-        key_bindings = KeyBindings()
-
-        for key_seq, payload in bindings.items():
-            @key_bindings.add(key_seq)
-            def _handler(event: KeyPressEvent, payload: str = payload) -> None:
-                if not self.config.get("ctrl_shortcuts_enabled", True):
-                    return
-                event.current_buffer.insert_text(payload)
-
-        return key_bindings
 
 
 def main() -> None:
