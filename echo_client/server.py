@@ -7,7 +7,7 @@ import itertools
 import json
 import signal
 import unicodedata
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional
 
 import websockets
 from rich.console import Console
@@ -44,6 +44,7 @@ class EchoServer:
         self._server: Any | None = None
         self._heartbeat_counts: dict[int, int] = {}
         self._client_names: dict[int, str] = {}
+        self._client_types: dict[int, str] = {}
         self._live_display_visibility: dict[int, bool] = {}
         self._graceful_disconnect_requests: dict[int, bool] = {}
         self._parentheses_once: bool = False
@@ -73,12 +74,22 @@ class EchoServer:
         self._sync_sigint_guard()
         host = self.config["host"]
         port = self.config["port"]
-        
+
+        server_waiter: Awaitable[Any] | None = None
+
         # Start WebUI server if enabled
         if self.config.get("enable_webui", False):
             await self._start_webui_server()
-        
-        self._server = await websockets.serve(self._handle_client, host, port)
+            if self._webui_server is not None:
+                server_waiter = self._webui_server.wait_closed()
+            else:
+                self.console.print(
+                    "[yellow]WebUI 模块启动失败，正在回退到基础 websocket 服务[/yellow]"
+                )
+
+        if self._webui_server is None:
+            self._server = await websockets.serve(self._handle_client, host, port)
+            server_waiter = self._server.wait_closed()
 
         self.console.print(
             f"[green]已经在 {host}:{port} 监听 websocket 请求，等待 echo 客户端接入...[/green]"
@@ -88,41 +99,49 @@ class EchoServer:
 
         asyncio.create_task(self._run_input_loop())
 
-        await self._server.wait_closed()
+        if server_waiter is not None:
+            await server_waiter
 
     async def shutdown(self) -> None:
         """Stop the websocket server."""
-        if self._server is None:
-            return
         self.console.print("[yellow]正在关闭服务器……[/yellow]")
-        
+
         # Stop WebUI server if running
         if self._webui_server is not None:
             await self._stop_webui_server()
-        
-        self._server.close()
-        await self._server.wait_closed()
+
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
         self._restore_sigint_guard()
 
     async def _start_webui_server(self) -> None:
         """Start the WebUI HTTP/WebSocket server."""
         try:
             from .echo_webui import WebUIServer
-            
+
             host = self.config.get("host", "127.0.0.1")
             port = self.config.get("port", 3000)
             webui_root = self.config.get("webui_root", "echoliveui")
             save_endpoint = self.config.get("webui_save_endpoint", "/api/save")
             websocket_path = self.config.get("webui_websocket_path", "/ws")
-            
+
+            modules = self.config.get("webui_modules", ["echo_webui"])
+
             self._webui_server = WebUIServer(
                 host=host,
                 port=port,
                 webui_root=webui_root,
                 save_endpoint=save_endpoint,
                 websocket_path=websocket_path,
+                modules=modules,
+                config_context={
+                    "websocketPath": websocket_path,
+                    "modulesEnabled": modules,
+                },
+                control_callback=self._handle_webui_control,
             )
-            await self._webui_server.start()
+            await self._webui_server.start(self._handle_client)
             self.console.print(
                 f"[green]WebUI 服务器已启动在 http://{host}:{port}[/green]"
             )
@@ -146,6 +165,7 @@ class EchoServer:
         self.console.print(f"客户端{client_id}: 已建立连接")
         self._heartbeat_counts[client_id] = 0
         self._client_names[client_id] = f"客户端{client_id}"
+        self._client_types[client_id] = "unknown"
         self._live_display_visibility[client_id] = False
         self._graceful_disconnect_requests[client_id] = False
 
@@ -166,6 +186,7 @@ class EchoServer:
                     await task
             heartbeat_count = self._heartbeat_counts.pop(client_id, 0)
             client_name = self._client_names.pop(client_id, None)
+            client_type = self._client_types.pop(client_id, None)
             self._live_display_visibility.pop(client_id, None)
             graceful = self._graceful_disconnect_requests.pop(client_id, False)
             summary = f"客户端{client_id}: 连接已断开（收到心跳 {heartbeat_count} 次）"
@@ -173,6 +194,8 @@ class EchoServer:
                 summary = (
                     f"客户端{client_id}({client_name}): 连接已断开（收到心跳 {heartbeat_count} 次）"
                 )
+            if client_type and client_type != "unknown":
+                summary += f"，类型: {client_type}"
             if disconnect_reason:
                 summary += f"，原因: {disconnect_reason}"
             if not graceful:
@@ -193,12 +216,9 @@ class EchoServer:
 
             match action:
                 case "hello":
-                    client_name = origin.get("name") or origin.get("uuid")
+                    client_name = self._handle_hello_event(origin, payload, client_id=client_id)
                     if client_name:
                         self._client_names[client_id] = client_name
-                        self.console.print(f"客户端{client_id}({client_name}): 上线")
-                    else:
-                        self.console.print(f"客户端{client_id}: 上线")
                 case "close":
                     self.console.print(f"客户端{client_id}: 发出下线请求")
                     self._graceful_disconnect_requests[client_id] = True
@@ -231,6 +251,13 @@ class EchoServer:
                 case "live_display_update":
                     self._handle_live_display_update(client_id, payload)
                 case _:
+                    if origin.get("type") == "server" and self._relay_server_action(
+                        data,
+                        raw_message,
+                        client_id=client_id,
+                    ):
+                        continue
+
                     self.console.print(f"客户端{client_id}: 发送了未知事件，事件原文: {data}")
 
     async def _pump_events(self, websocket: Any, client_id: int) -> None:
@@ -787,6 +814,152 @@ class EchoServer:
         self.console.print(
             f"客户端{client_id}: 实时展示 {state_label}{vanish_hint}{extra}"
         )
+
+    def _relay_server_action(
+        self,
+        message: dict[str, Any],
+        raw_message: str,
+        *,
+        client_id: int,
+    ) -> bool:
+        """Relay control actions originated from WebUI server connections."""
+
+        action = message.get("action")
+        if not isinstance(action, str):
+            return False
+
+        if action == "ping":
+            return True
+
+        forwarding_map = {
+            "message_data": "推送消息",
+            "echo_next": "触发下一条消息",
+            "set_live_display": "更新实时展示状态",
+            "history_clear": "清空历史记录",
+            "set_theme": "设置主题",
+            "set_theme_style_url": "设置主题样式",
+            "set_avatar": "设置角色头像",
+            "broadcast_close": "关闭广播",
+            "websocket_close": "关闭 WebSocket 连接",
+            "shutdown": "触发关机流程",
+        }
+
+        description = forwarding_map.get(action)
+        if description is None:
+            return False
+
+        origin = message.get("from") or {}
+        label = origin.get("name") or origin.get("uuid") or f"客户端{client_id}"
+
+        note = description
+        if action == "message_data":
+            preview = self._summarize_message_payload(message.get("data"))
+            if preview:
+                note = f"推送消息: {preview}"
+
+        self.console.print(f"{label}: {note}")
+
+        event_description = f"来自 WebUI: {description}"
+        if action == "message_data" and note != description:
+            event_description = f"来自 WebUI: {note}"
+
+        self._enqueue_payload(
+            raw_message,
+            label=action,
+            description=event_description,
+        )
+        return True
+
+    @staticmethod
+    def _summarize_message_payload(payload: dict[str, Any] | None) -> str:
+        """Generate a short preview string for message_data logs."""
+
+        if not isinstance(payload, dict):
+            return ""
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return ""
+        first = messages[0]
+        text: Any
+        if isinstance(first, dict):
+            text = first.get("message")
+            if isinstance(text, dict):
+                text = text.get("text")
+        else:
+            text = first
+
+        if not isinstance(text, str):
+            return ""
+
+        preview = text.strip()
+        if len(preview) > 20:
+            preview = preview[:20] + "…"
+        return preview
+
+    def _handle_hello_event(
+        self,
+        origin: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        client_id: int | None = None,
+        channel: str | None = None,
+    ) -> Optional[str]:
+        """Log hello events consistently across websocket sources."""
+
+        client_name = origin.get("name") or origin.get("uuid")
+        client_type = origin.get("type")
+        hidden = payload.get("hidden")
+        targeted = payload.get("targeted")
+
+        status_bits: list[str] = []
+        if isinstance(client_type, str) and client_type:
+            status_bits.append(f"类型: {client_type}")
+        if hidden is True:
+            status_bits.append("隐藏")
+        elif hidden is False:
+            status_bits.append("可见")
+        if targeted:
+            status_bits.append("定向模式")
+
+        status_text = f"，状态: {', '.join(status_bits)}" if status_bits else ""
+
+        if client_id is not None:
+            label = f"客户端{client_id}"
+            if client_name and client_name != label:
+                label = f"{label}({client_name})"
+            if isinstance(client_type, str) and client_type:
+                self._client_types[client_id] = client_type
+            self.console.print(f"{label}: 上线{status_text}")
+        elif channel is not None:
+            label = client_name or origin.get("uuid") or "匿名客户端"
+            channel_label = channel or "global"
+            self.console.print(
+                f"频道[{channel_label}] {label}: 上线{status_text}"
+            )
+
+        return client_name
+
+    def _handle_webui_control(self, message: dict[str, Any], channel: str) -> None:
+        """Handle control messages originating from the WebUI broadcast websocket."""
+
+        action = message.get("action")
+        origin = message.get("from") or {}
+        payload = message.get("data") or {}
+        channel_name = channel or "global"
+
+        if action == "hello":
+            self._handle_hello_event(origin, payload, channel=channel_name)
+        elif action == "close":
+            label = origin.get("name") or origin.get("uuid") or "匿名客户端"
+            self.console.print(f"频道[{channel_name}] {label}: 离开")
+        elif action == "page_hidden":
+            label = origin.get("name") or origin.get("uuid") or "匿名客户端"
+            self.console.print(f"频道[{channel_name}] {label}: 页面隐藏")
+        elif action == "page_visible":
+            label = origin.get("name") or origin.get("uuid") or "匿名客户端"
+            self.console.print(f"频道[{channel_name}] {label}: 页面可见")
+        elif action == "websocket_heartbeat":
+            return
 
     def _sync_sigint_guard(self) -> None:
         if self.config.get("inhibit_ctrl_c", True):
