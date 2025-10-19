@@ -77,7 +77,16 @@ class WebUIServer:
         return web.Response(text="WebUI not found", status=404)
 
     async def _handle_save_config(self, request: web.Request) -> web.Response:
-        """Handle POST requests to save configuration files."""
+        """Handle POST requests to save configuration files.
+
+        This endpoint allows saving configuration files to disk. While it accepts
+        user-provided paths, it includes validation to prevent path traversal attacks:
+        1. Paths are resolved and checked to ensure files stay within the specified root
+        2. Filenames are validated to reject path separators and '..' sequences
+        3. The relative_to() check ensures the final path is within the intended directory
+
+        This is intentional functionality for the WebUI to manage configuration files.
+        """
         try:
             data = await request.json()
         except json.JSONDecodeError:
@@ -101,12 +110,29 @@ class WebUIServer:
             return web.json_response({"error": error_msg}, status=400)
 
         try:
-            root_path = Path(root)
+            # Validate and normalize paths to prevent path traversal attacks
+            root_path = Path(root).resolve()
+            file_path = (root_path / name).resolve()
+
+            # Ensure the file_path is within root_path (prevent directory traversal)
+            try:
+                file_path.relative_to(root_path)
+            except ValueError:
+                error_msg = "保存配置失败: 无效的文件路径"
+                logger.warning("Path traversal attempt detected: %s not in %s",
+                             file_path, root_path)
+                return web.json_response({"error": error_msg}, status=400)
+
+            # Validate filename doesn't contain path separators
+            if "/" in name or "\\" in name or ".." in name:
+                error_msg = "保存配置失败: 文件名包含非法字符"
+                logger.warning("Invalid filename: %s", name)
+                return web.json_response({"error": error_msg}, status=400)
+
             if not root_path.exists():
-                logger.debug("目录不存在，创建目录: %s", root)
+                logger.debug("目录不存在，创建目录: %s", root_path)
                 root_path.mkdir(parents=True, exist_ok=True)
 
-            file_path = root_path / name
             logger.debug("准备写入文件: %s", file_path)
 
             file_path.write_text(
