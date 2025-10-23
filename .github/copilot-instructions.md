@@ -47,22 +47,54 @@ echo-client/
 
 ## Echo-live WebSocket Protocol
 
-Echo Client implements a WebSocket server that Echo-live connects to as a client. Key protocol details:
+Echo Client implements a WebSocket server that Echo-live connects to as a client. This section provides comprehensive documentation about the protocol.
 
-### Protocol Documentation References
+### Overview
+
+The WebSocket protocol enables bidirectional communication between Echo Client (server) and Echo-live (client). Echo Client sends message data and control commands, while Echo-live sends status updates and events back.
+
+### Complete Protocol Documentation References
+
+#### Message Format Documentation
 - **Base Message Format**: https://echo-live-doc.pages.dev/message/base/
-- **Broadcast Protocol**: https://echo-live-doc.pages.dev/dev/broadcast/
+- **Start Paragraph**: https://echo-live-doc.pages.dev/message/start-par/ - Controls paragraph-level display
+- **Style Formatting**: https://echo-live-doc.pages.dev/message/style/ - Text styling (bold, italic, color, size, etc.)
+- **Pause Events**: https://echo-live-doc.pages.dev/message/pause/ - Insert timed pauses in message display
+- **General Events**: https://echo-live-doc.pages.dev/message/event/ - Event system for typewriting and animations
+- **Paragraph Management**: https://echo-live-doc.pages.dev/message/paragraph/ - Multi-paragraph message handling
 
-### Core Message Types
+#### Broadcast API Documentation
+- **Broadcast Overview**: https://echo-live-doc.pages.dev/dev/broadcast/ - Main broadcast protocol page
+- **API Reference**: https://echo-live-doc.pages.dev/dev/broadcast/api/ - Complete API listing
 
-1. **Text Messages**: JSON with `action: "send"` containing message data, username, and formatting
-2. **Control Events**: 
-   - `echo_next` - Skip to next message
-   - `pause` - Insert timed pause
-   - Typewriting events with pinyin/zhuyin data
-3. **Client Management**: Connection tracking, heartbeat (`ping`), display visibility states
+#### Broadcast API Actions (Server → Client)
+
+**Connection & Lifecycle:**
+- **hello**: https://echo-live-doc.pages.dev/dev/broadcast/api/hello/ - Initial handshake from Echo-live client
+- **ping**: https://echo-live-doc.pages.dev/dev/broadcast/api/ping/ - Heartbeat mechanism for connection monitoring
+- **websocket_heartbeat**: https://echo-live-doc.pages.dev/dev/broadcast/api/websocket_heartbeat/ - Alternative heartbeat format
+- **close**: https://echo-live-doc.pages.dev/dev/broadcast/api/close/ - Graceful connection closure
+- **websocket_close**: https://echo-live-doc.pages.dev/dev/broadcast/api/websocket_close/ - WebSocket-level close event
+- **shutdown**: https://echo-live-doc.pages.dev/dev/broadcast/api/shutdown/ - Server shutdown notification
+
+**Display State Management:**
+- **page_visible**: https://echo-live-doc.pages.dev/dev/broadcast/api/page_visible/ - Page becomes visible (tab focused)
+- **page_hidden**: https://echo-live-doc.pages.dev/dev/broadcast/api/page_hidden/ - Page becomes hidden (tab unfocused)
+- **live_display_update**: https://echo-live-doc.pages.dev/dev/broadcast/api/live_display_update/ - Display state changed
+- **set_live_display**: https://echo-live-doc.pages.dev/dev/broadcast/api/set_live_display/ - Set display visibility
+
+**Message Control:**
+- **echo_next**: https://echo-live-doc.pages.dev/dev/broadcast/api/echo_next/ - Skip to next message
+- **echo_printing**: https://echo-live-doc.pages.dev/dev/broadcast/api/echo_printing/ - Typewriting progress update
+- **echo_state_update**: https://echo-live-doc.pages.dev/dev/broadcast/api/echo_state_update/ - Message state changed
+- **history_clear**: https://echo-live-doc.pages.dev/dev/broadcast/api/history_clear/ - Clear message history
+
+**Error Handling:**
+- **error**: https://echo-live-doc.pages.dev/dev/broadcast/api/error/ - General error response
+- **error_unknown**: https://echo-live-doc.pages.dev/dev/broadcast/api/error_unknown/ - Unknown action error
 
 ### Message Structure
+
 Messages sent to Echo-live follow this general structure:
 ```json
 {
@@ -74,6 +106,102 @@ Messages sent to Echo-live follow this general structure:
   }
 }
 ```
+
+### Core Message Components
+
+#### 1. Message Segments (`messages` array)
+Each message consists of segments with text and optional styling:
+```json
+{
+  "text": "Hello",
+  "style": {
+    "color": "#66ccff",
+    "bold": true,
+    "italic": false,
+    "size": "middle"
+  }
+}
+```
+
+Supported style properties:
+- **color**: Hex color code or named color
+- **bold**: Boolean for bold text
+- **italic**: Boolean for italic text
+- **underline**: Boolean for underlined text
+- **strike**: Boolean for strikethrough
+- **size**: String - "extra-small", "small", "middle", "large", "extra-large"
+- **className**: String - CSS class name (optionally prefixed with "echo-text-")
+
+#### 2. Events Array
+Events control display timing and animations:
+
+**Pause Event:**
+```json
+{
+  "name": "pause",
+  "duration": 500  // milliseconds
+}
+```
+
+**Typewriting Event:**
+```json
+{
+  "name": "echo",
+  "text": "你好",
+  "data": "ni3 hao3",  // pinyin or zhuyin representation
+  "speed": 10  // ms per character
+}
+```
+
+#### 3. Paragraph Control
+Use `start-par` property to control paragraph display:
+```json
+{
+  "action": "send",
+  "data": {
+    "username": "Someone",
+    "messages": [...],
+    "start-par": false  // Continue in same paragraph vs. new paragraph
+  }
+}
+```
+
+### Client-to-Server Messages
+
+Echo-live clients send these actions to the server:
+
+1. **hello** - Initial connection with client info
+2. **ping** - Heartbeat to maintain connection
+3. **page_visible/page_hidden** - Tab visibility changes
+4. **echo_state_update** - Message display state changes
+5. **echo_printing** - Typewriting progress updates
+6. **live_display_update** - Display visibility changes
+7. **close** - Graceful disconnect notification
+
+### Server Response Pattern
+
+For most client messages, the server should:
+1. Update internal state (client tracking, heartbeat counts, visibility)
+2. Optionally respond with acknowledgment (not required for heartbeats)
+3. Log events to console for debugging
+
+### Implementation in Echo Client
+
+The `EchoServer` class handles the protocol:
+- `_handle_client()` - Main WebSocket handler
+- Tracks client state in multiple dicts (IDs, names, types, visibility, heartbeat counts)
+- Sends messages via `_broadcast_to_websocket()`
+- Processes incoming events and updates console display
+
+### Protocol Best Practices
+
+1. **Always send valid JSON** - Echo-live will reject malformed messages
+2. **Include username** - Required field for all "send" actions
+3. **Validate message structure** - Use the parsing functions in `message.py`
+4. **Handle disconnects gracefully** - Clean up client state on disconnect
+5. **Monitor heartbeats** - Track ping messages to detect dead connections
+6. **Respect display visibility** - Don't send messages when page is hidden (optional)
+7. **Use typewriting carefully** - Requires proper text segmentation for Chinese
 
 ## Development Workflow
 
