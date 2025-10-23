@@ -15,7 +15,7 @@ from rich.console import Console
 CONFIG_FILENAME = "config.yaml"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "command_prefix": "Someone",
+    "command_prefix": "/",
     "username": "Someone",
     "host": "127.0.0.1",
     "port": 3000,
@@ -31,10 +31,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "inhibit_ctrl_c": True,
     "auto_suffix": False,
     "auto_suffix_value": "喵",
-    "enable_webui": False,
-    "webui_root": "echoliveui",
-    "webui_save_endpoint": "/api/save",
-    "webui_websocket_path": "/ws",
 }
 
 
