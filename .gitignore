@@ -4,16 +4,38 @@
 # python cache
 __pycache__
 *.pyc
+*.pyo
+*.pyd
+.Python
 config.yaml
 
 # poetry build
 dist/
+build/
 
 # nix build
 result
-build/
-.vscode/
-dist/
 
+# IDE
+.vscode/
+.idea/
+
+# Logs
 *.log
-echoliveui/*
+
+# PyInstaller
+*.spec
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
