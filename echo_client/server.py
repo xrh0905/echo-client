@@ -7,7 +7,7 @@ import itertools
 import json
 import signal
 import unicodedata
-from typing import Any, Awaitable, Optional
+from typing import Any, Optional
 
 import websockets
 from rich.console import Console
@@ -128,10 +128,10 @@ class EchoServer:
             client_type = self._client_types.pop(client_id, None)
             self._live_display_visibility.pop(client_id, None)
             graceful = self._graceful_disconnect_requests.pop(client_id, False)
-            
+
             # Remove client from appropriate list
             self._remove_client_from_lists(client_id)
-            
+
             summary = f"客户端{client_id}: 连接已断开（收到心跳 {heartbeat_count} 次）"
             if client_name and client_name != f"客户端{client_id}":
                 summary = (
@@ -731,7 +731,7 @@ class EchoServer:
         """Add a client to the appropriate list based on its type."""
         # Remove from all lists first to avoid duplicates
         self._remove_client_from_lists(client_id)
-        
+
         # Add to the appropriate list
         if client_type == "history":
             if client_id not in self._history_clients:
@@ -742,7 +742,7 @@ class EchoServer:
         elif client_type == "server":
             if client_id not in self._editor_clients:
                 self._editor_clients.append(client_id)
-    
+
     def _remove_client_from_lists(self, client_id: int) -> None:
         """Remove a client from all client lists."""
         if client_id in self._history_clients:
