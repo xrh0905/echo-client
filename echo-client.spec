@@ -56,5 +56,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='realme_sheep_triangle.ico',
-    version_file=None,
+    version_file='version_info.txt',
 )
