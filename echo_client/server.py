@@ -7,7 +7,7 @@ import itertools
 import json
 import signal
 import unicodedata
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import websockets
 from rich.console import Console
@@ -104,7 +104,9 @@ class EchoServer:
         self.console.print(f"客户端{client_id}: 已建立连接")
         self._heartbeat_counts[client_id] = 0
         self._client_names[client_id] = f"客户端{client_id}"
-        self._client_types[client_id] = "unknown"
+        self._client_types[client_id] = "live"
+        self._add_client_to_list(client_id, "live")
+        self._report_client_groups()
         self._live_display_visibility[client_id] = False
         self._graceful_disconnect_requests[client_id] = False
 
@@ -131,13 +133,14 @@ class EchoServer:
 
             # Remove client from appropriate list
             self._remove_client_from_lists(client_id)
+            self._report_client_groups()
 
             summary = f"客户端{client_id}: 连接已断开（收到心跳 {heartbeat_count} 次）"
             if client_name and client_name != f"客户端{client_id}":
                 summary = (
                     f"客户端{client_id}({client_name}): 连接已断开（收到心跳 {heartbeat_count} 次）"
                 )
-            if client_type and client_type != "unknown":
+            if client_type and client_type not in {"unknown", "live"}:
                 summary += f"，类型: {client_type}"
             if disconnect_reason:
                 summary += f"，原因: {disconnect_reason}"
@@ -213,6 +216,12 @@ class EchoServer:
                             f"[red]客户端{client_id}: 事件缺少可发送的 payload，已忽略[/red]"
                         )
                         continue
+
+                    target_types = event.get("target_types")
+                    if target_types:
+                        client_type = self._effective_client_type(client_id)
+                        if client_type not in set(target_types):
+                            continue
 
                     label = event.get("label")
                     if label is None:
@@ -499,20 +508,21 @@ class EchoServer:
         if args:
             self.console.print("[yellow]/skip 不需要参数，已忽略额外输入。[/yellow]")
 
-        skip_mode = self.config.get("skip_mode", "blank_text")
+        skip_mode_value = self.config.get("skip_mode", "blank_text")
+        skip_mode = str(skip_mode_value).lower() if skip_mode_value is not None else "blank_text"
 
-        if skip_mode == "echo_next":
-            # Original behavior: send echo_next to stop output
-            payload = json.dumps({"action": "echo_next", "data": {}}, ensure_ascii=False)
-            self._enqueue_payload(payload, label="echo_next", description="触发 echo_next")
-            self.console.print("[green]已加入 echo_next 指令（由 /skip 触发）[/green]")
-        elif skip_mode == "hide_display":
+        if skip_mode == "hide_display":
             # Optional behavior: send action to make live hide
             payload = json.dumps({"action": "set_live_display", "data": {"display": False}}, ensure_ascii=False)
-            self._enqueue_payload(payload, label="set_live_display", description="隐藏实时展示")
+            self._enqueue_payload(
+                payload,
+                label="set_live_display",
+                description="隐藏实时展示",
+                target_types={"live"},
+            )
             self.console.print("[green]已发送隐藏实时展示指令（由 /skip 触发）[/green]")
         else:  # blank_text (default)
-            # New default behavior: push blank text to live group
+            # Default behavior: push blank text to live group
             username_value = self._format_username_for_message()
             payload = json.dumps(
                 {
@@ -524,10 +534,27 @@ class EchoServer:
                 },
                 ensure_ascii=False
             )
-            self._enqueue_payload(payload, label="message_data", description="发送空白文本")
-            self.console.print("[green]已发送空白文本（由 /skip 触发）[/green]")
+            self._enqueue_payload(
+                payload,
+                label="message_data",
+                description="发送空白文本",
+                target_types={"live"},
+            )
+            self.console.print("[green]已向实时展示发送空白文本（由 /skip 触发）[/green]")
+
+        self._enqueue_echo_next_for_history()
 
         return True
+
+    def _enqueue_echo_next_for_history(self) -> None:
+        payload = json.dumps({"action": "echo_next", "data": {}}, ensure_ascii=False)
+        self._enqueue_payload(
+            payload,
+            label="echo_next",
+            description="触发 echo_next（历史客户端）",
+            target_types={"history"},
+        )
+        self.console.print("[green]已向历史客户端发送 echo_next 指令（由 /skip 触发）[/green]")
 
     def _cmd_clear(self, args: list[str]) -> bool:
         if args:
@@ -713,6 +740,7 @@ class EchoServer:
         delay: int | float | None = None,
         label: str | None = None,
         description: str | None = None,
+        target_types: Iterable[str] | None = None,
     ) -> None:
         event: dict[str, Any] = {"payload": payload}
         if label:
@@ -721,6 +749,13 @@ class EchoServer:
             event["description"] = description
         if isinstance(delay, (int, float)) and delay > 0:
             event["delay"] = delay
+        if target_types is not None:
+            filtered = {item for item in target_types if isinstance(item, str) and item}
+            if filtered:
+                normalized = {self._normalize_client_type(item) for item in filtered}
+                normalized.discard("unknown")
+                if normalized:
+                    event["target_types"] = tuple(sorted(normalized))
         self._events.append(event)
 
     def _enqueue_message(self, text: str) -> None:
@@ -781,13 +816,16 @@ class EchoServer:
         self._remove_client_from_lists(client_id)
 
         # Add to the appropriate list
-        if client_type == "history":
+        normalized = self._normalize_client_type(client_type)
+        if normalized == "unknown":
+            normalized = "live"
+        if normalized == "history":
             if client_id not in self._history_clients:
                 self._history_clients.append(client_id)
-        elif client_type == "live":
+        elif normalized == "live":
             if client_id not in self._live_clients:
                 self._live_clients.append(client_id)
-        elif client_type == "server":
+        elif normalized == "server":
             if client_id not in self._editor_clients:
                 self._editor_clients.append(client_id)
 
@@ -832,9 +870,12 @@ class EchoServer:
             if client_name and client_name != label:
                 label = f"{label}({client_name})"
             if isinstance(client_type, str) and client_type:
-                self._client_types[client_id] = client_type
+                normalized_type = self._normalize_client_type(client_type)
+                effective_type = normalized_type if normalized_type != "unknown" else "live"
+                self._client_types[client_id] = effective_type
                 # Add client to appropriate list based on type
-                self._add_client_to_list(client_id, client_type)
+                self._add_client_to_list(client_id, effective_type)
+                self._report_client_groups()
             self.console.print(f"{label}: 上线{status_text}")
         elif channel is not None:
             label = client_name or origin.get("uuid") or "匿名客户端"
@@ -844,6 +885,32 @@ class EchoServer:
             )
 
         return client_name
+
+    def _normalize_client_type(self, client_type: Any) -> str:
+        if not isinstance(client_type, str):
+            return "unknown"
+        value = client_type.strip().lower()
+        if value in {"history", "live", "server"}:
+            return value
+        return "unknown"
+
+    def _effective_client_type(self, client_id: int) -> str:
+        raw_type = self._client_types.get(client_id)
+        normalized = self._normalize_client_type(raw_type)
+        if normalized == "unknown":
+            return "live"
+        return normalized
+
+    def _report_client_groups(self) -> None:
+        segments: list[str] = []
+        if self._live_clients:
+            segments.append("live: " + ",".join(str(cid) for cid in self._live_clients))
+        if self._history_clients:
+            segments.append("history: " + ",".join(str(cid) for cid in self._history_clients))
+        if self._editor_clients:
+            segments.append("server: " + ",".join(str(cid) for cid in self._editor_clients))
+        if segments:
+            self.console.print("[dim]客户端分组 -> " + " | ".join(segments) + "[/dim]")
 
     def _sync_sigint_guard(self) -> None:
         if self.config.get("inhibit_ctrl_c", True):
