@@ -24,7 +24,8 @@ result
 *.log
 
 # PyInstaller
-*.spec
+*.spec.bak
+# Keep echo-client.spec in repository
 
 # Pytest
 .pytest_cache/
