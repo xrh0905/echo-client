@@ -42,9 +42,9 @@ jobs:
             --remove-output `
             --company-name="Echo-Client" `
             --product-name="Echo Client" `
-            --file-version="0.3.0" `
-            --product-version="0.3.0" `
-            --file-description="Echo-live WebSocket CLI Client" `
+            --file-version="0.1.0" `
+            --product-version="0.1.0" `
+            --file-description="Echo-live WebSocket CLI Server" `
             --lto=yes `
             --jobs=2 `
             main.py
