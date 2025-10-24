@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install dependencies
         run: |
@@ -32,9 +32,10 @@ jobs:
       - name: Build with Nuitka
         run: |
           python -m nuitka `
-            --standalone `
-            --onefile `
+            --mode=onefile `
+            --include-package=websockets `
             --include-package-data=pypinyin `
+            --enable-plugin=numpy `
             --windows-icon-from-ico=realme_sheep_triangle.ico `
             --assume-yes-for-downloads `
             --output-filename=echo-client.exe `
@@ -46,7 +47,7 @@ jobs:
             --product-version="0.1.0" `
             --file-description="Echo-live WebSocket CLI Server" `
             --lto=yes `
-            --jobs=2 `
+            --jobs=4 `
             main.py
 
       - name: Upload artifact
