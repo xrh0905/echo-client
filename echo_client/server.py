@@ -24,6 +24,7 @@ from .commands import (
 from .config import load_config, save_config
 from .message import (
     apply_autopause,
+    format_username,
     get_delay,
     normalize_typewriting_scheme,
     parse_message,
@@ -523,7 +524,7 @@ class EchoServer:
             self.console.print("[green]已发送隐藏实时展示指令（由 /skip 触发）[/green]")
         else:  # blank_text (default)
             # Default behavior: push blank text to live group
-            username_value = self._format_username_for_message()
+            username_value = format_username(self.config)
             payload = json.dumps(
                 {
                     "action": "message_data",
@@ -605,8 +606,6 @@ class EchoServer:
             )
 
         self.console.print(table)
-        if any(spec.legacy_aliases for spec in catalog.specs):
-            self.console.print("[dim]提示: 历史命令仍可用，但推荐优先使用表格中的短别名。[/dim]")
         return True
 
     def _print_command_details(self, spec: CommandSpec, prefix: str) -> None:
@@ -624,10 +623,6 @@ class EchoServer:
         alias_text = format_aliases(spec.aliases, prefix)
         if alias_text != "-":
             self.console.print(f"[white]常用别名[/white]: {alias_text}")
-
-        if spec.legacy_aliases:
-            legacy_aliases = ", ".join(f"{prefix}{alias}" for alias in spec.legacy_aliases)
-            self.console.print(f"[white]历史别名[/white]: {legacy_aliases}")
 
         self.console.print(f"[white]参数[/white]: {argument_hint(spec)}")
         status = command_status(self, spec)
@@ -672,20 +667,6 @@ class EchoServer:
                         break
         except FileNotFoundError:
             self.console.print("[red]这个文件怕是不存在吧！已终止后续的解析！[/]")
-
-    def _format_username_for_message(self) -> str:
-        """Format the username according to config settings."""
-        raw = self.config.get("username", "/")
-        username = "/" if raw is None else str(raw)
-        if not self.config.get("username_brackets", False):
-            return username
-
-        inner = username.strip()
-        if inner.startswith("【") and inner.endswith("】") and len(inner) >= 2:
-            return inner
-        if inner:
-            return f"【{inner}】"
-        return "【】"
 
     @staticmethod
     def _is_wrapped(text: str, left: str, right: str) -> bool:
@@ -780,22 +761,6 @@ class EchoServer:
         closed_attr = getattr(websocket, "closed", None)
         if isinstance(closed_attr, bool):
             return closed_attr
-        if callable(closed_attr):
-            try:
-                result = closed_attr()
-            except TypeError:
-                result = None
-            if isinstance(result, bool):
-                return result
-
-        state = getattr(websocket, "state", None)
-        if state is not None:
-            state_name = getattr(state, "name", "")
-            if state_name in {"CLOSING", "CLOSED"}:
-                return True
-            if state_name == "OPEN":
-                return False
-
         return False
 
     def _handle_live_display_update(self, client_id: int, payload: dict[str, Any]) -> None:
@@ -844,7 +809,6 @@ class EchoServer:
         payload: dict[str, Any],
         *,
         client_id: int | None = None,
-        channel: str | None = None,
     ) -> Optional[str]:
         """Log hello events consistently across websocket sources."""
 
@@ -877,12 +841,6 @@ class EchoServer:
                 self._add_client_to_list(client_id, effective_type)
                 self._report_client_groups()
             self.console.print(f"{label}: 上线{status_text}")
-        elif channel is not None:
-            label = client_name or origin.get("uuid") or "匿名客户端"
-            channel_label = channel or "global"
-            self.console.print(
-                f"频道[{channel_label}] {label}: 上线{status_text}"
-            )
 
         return client_name
 
