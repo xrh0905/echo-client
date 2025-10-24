@@ -33,9 +33,8 @@ jobs:
         run: |
           python -m nuitka `
             --mode=onefile `
-            --include-package=websockets `
+            --include-package=websockets.asyncio `
             --include-package-data=pypinyin `
-            --enable-plugin=numpy `
             --windows-icon-from-ico=realme_sheep_triangle.ico `
             --assume-yes-for-downloads `
             --output-filename=echo-client.exe `
