@@ -498,9 +498,43 @@ class EchoServer:
     def _cmd_skip(self, args: list[str]) -> bool:
         if args:
             self.console.print("[yellow]/skip 不需要参数，已忽略额外输入。[/yellow]")
-        payload = json.dumps({"action": "echo_next", "data": {}}, ensure_ascii=False)
-        self._enqueue_payload(payload, label="echo_next", description="触发 echo_next")
-        self.console.print("[green]已加入 echo_next 指令（由 /skip 触发）[/green]")
+
+        skip_mode = self.config.get("skip_mode", "blank_text")
+
+        if skip_mode == "echo_next":
+            # Original behavior: send echo_next to stop output
+            payload = json.dumps({"action": "echo_next", "data": {}}, ensure_ascii=False)
+            self._enqueue_payload(payload, label="echo_next", description="触发 echo_next")
+            self.console.print("[green]已加入 echo_next 指令（由 /skip 触发）[/green]")
+        elif skip_mode == "hide_display":
+            # Optional behavior: send action to make live hide
+            payload = json.dumps({"action": "set_live_display", "data": {"display": False}}, ensure_ascii=False)
+            self._enqueue_payload(payload, label="set_live_display", description="隐藏实时展示")
+            self.console.print("[green]已发送隐藏实时展示指令（由 /skip 触发）[/green]")
+        else:  # blank_text (default)
+            # New default behavior: push blank text to live group
+            username_value = self._format_username_for_message()
+            payload = json.dumps(
+                {
+                    "action": "message_data",
+                    "data": {
+                        "username": username_value,
+                        "messages": [{"message": [{"text": ""}]}],
+                    },
+                },
+                ensure_ascii=False
+            )
+            self._enqueue_payload(payload, label="message_data", description="发送空白文本")
+            self.console.print("[green]已发送空白文本（由 /skip 触发）[/green]")
+
+        return True
+
+    def _cmd_clear(self, args: list[str]) -> bool:
+        if args:
+            self.console.print("[yellow]/clear 不需要参数，已忽略额外输入。[/yellow]")
+        payload = json.dumps({"action": "history_clear", "data": {}}, ensure_ascii=False)
+        self._enqueue_payload(payload, label="history_clear", description="清空历史记录")
+        self.console.print("[green]已发送清空历史记录指令（由 /clear 触发）[/green]")
         return True
 
     def _cmd_help(self, args: list[str]) -> bool:
@@ -611,6 +645,20 @@ class EchoServer:
                         break
         except FileNotFoundError:
             self.console.print("[red]这个文件怕是不存在吧！已终止后续的解析！[/]")
+
+    def _format_username_for_message(self) -> str:
+        """Format the username according to config settings."""
+        raw = self.config.get("username", "/")
+        username = "/" if raw is None else str(raw)
+        if not self.config.get("username_brackets", False):
+            return username
+
+        inner = username.strip()
+        if inner.startswith("【") and inner.endswith("】") and len(inner) >= 2:
+            return inner
+        if inner:
+            return f"【{inner}】"
+        return "【】"
 
     @staticmethod
     def _is_wrapped(text: str, left: str, right: str) -> bool:

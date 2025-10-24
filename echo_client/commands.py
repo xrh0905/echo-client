@@ -230,8 +230,14 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
             name="skip",
             aliases=("cancel",),
             handler=server._cmd_skip,
-            description="向客户端发送 echo_next 指令",
+            description="根据配置跳过当前对话（模式: echo_next/blank_text/hide_display）",
             legacy_aliases=("next", "tn"),
+        ),
+        CommandSpec(
+            name="clear",
+            aliases=("clr", "cls"),
+            handler=server._cmd_clear,
+            description="清空历史记录框",
         ),
         CommandSpec(
             name="nocc",
