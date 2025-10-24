@@ -47,7 +47,6 @@ jobs:
             --product-version="0.1.0" `
             --file-description="Echo-live WebSocket CLI Server" `
             --lto=yes `
-            --optimize=2 `
             --jobs=4 `
             main.py
 
