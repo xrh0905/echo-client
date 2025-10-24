@@ -14,7 +14,7 @@
 - **可编程的消息后缀**：支持自动为文本追加自定义结尾字符（默认“喵”），并提供语义判断避免对无意义内容添尾。
 - **退出保护**：默认屏蔽 `Ctrl+C` 等中断信号，避免误触；可通过命令即时切换。
 - **批量脚本执行**：通过 `/source` 命令导入 `message_sample.txt` 等脚本文件，实现自动播报。
-- **跨平台打包**：内置 PyInstaller spec，可将工具封装为单文件或单目录可执行程序。
+- **跨平台打包**：使用 Nuitka 编译打包，可将工具封装为优化的单文件可执行程序。
 
 ## 🚀 快速开始
 
@@ -141,14 +141,12 @@ echo-client 同时支持两套叠加格式：
 
 ## 📦 打包可执行文件
 
-仓库内置 `build.spec` 与 `echo-client.spec`。使用 PyInstaller 打包：
+使用 Nuitka 打包为优化的独立可执行文件：
 
 ```powershell
 python -m pip install --upgrade pip
 pip install -r pyrequirements.txt
-pyinstaller --onefile --name echo-client build.spec
-# 或
-pyinstaller echo-client.spec
+python -m nuitka --standalone --onefile --include-package-data=pypinyin --windows-icon-from-ico=realme_sheep_triangle.ico --assume-yes-for-downloads --output-filename=echo-client.exe --output-dir=dist --remove-output main.py
 ```
 
 构建完成的单文件位于 `dist/echo-client.exe`。可执行文件会在自身目录创建/更新 `config.yaml`，无需额外携带配置。
