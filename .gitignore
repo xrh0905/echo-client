@@ -23,9 +23,6 @@ result
 # Logs
 *.log
 
-# PyInstaller
-*.spec
-
 # Pytest
 .pytest_cache/
 .coverage
