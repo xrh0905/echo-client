@@ -22,7 +22,7 @@ EVENT_TOKENS: Dict[str, str] = {
 }
 
 
-def _format_username(config: Dict[str, Any]) -> str:
+def format_username(config: Dict[str, Any]) -> str:
     raw = config.get("username", "/")
     username = "/" if raw is None else str(raw)
     if not config.get("username_brackets", False):
@@ -490,7 +490,7 @@ def render(config: Dict[str, Any], messages: List[Dict[str, Any]]) -> str:
     typewriting_scheme = normalize_typewriting_scheme(
         str(config.get("typewriting_scheme", DEFAULT_TYPEWRITING_SCHEME))
     )
-    username_value = _format_username(config)
+    username_value = format_username(config)
     for message in messages:
         data = _clone_entry(message)
         text_value = data.get("text")
@@ -532,6 +532,7 @@ __all__ = [
     "apply_autopause",
     "get_delay",
     "get_typewriting_string",
+    "format_username",
     "normalize_typewriting_scheme",
     "parse_message",
     "render",
