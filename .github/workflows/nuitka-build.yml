@@ -33,6 +33,7 @@ jobs:
         run: |
           python -m nuitka `
             --mode=onefile `
+            --onefile-child-grace-time=infinity `
             --include-package=websockets.asyncio `
             --include-package-data=pypinyin `
             --include-package-data=jieba `

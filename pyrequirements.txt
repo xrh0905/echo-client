@@ -1,4 +1,4 @@
 -r requirements.txt
-nuitka
+git+https://github.com/Nuitka/Nuitka.git@develop
 ordered-set
 zstandard
