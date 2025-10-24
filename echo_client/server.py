@@ -227,6 +227,8 @@ class EchoServer:
                     self._heartbeat_counts[client_id] = self._heartbeat_counts.get(client_id, 0) + 1
                 case "live_display_update":
                     self._handle_live_display_update(client_id, payload)
+                case "error_unknown":
+                    self._handle_error_unknown(client_id, payload)
                 case _:
                     self.console.print(f"客户端{client_id}: 发送了未知事件，事件原文: {data}")
 
@@ -860,6 +862,29 @@ class EchoServer:
         self.console.print(
             f"客户端{client_id}: 实时展示 {state_label}{vanish_hint}{extra}"
         )
+
+    def _handle_error_unknown(self, client_id: int, payload: dict[str, Any]) -> None:
+        """Handle error_unknown events from the client with prettier formatting."""
+        message = payload.get("message", "未知错误")
+        source = payload.get("source", "")
+        line = payload.get("line", 0)
+        col = payload.get("col", 0)
+
+        error_parts = [f"[red]客户端{client_id}: 客户端报告错误[/red]"]
+        error_parts.append(f"  [yellow]消息:[/yellow] {message}")
+
+        if source and source != "null" and source != "undefined":
+            error_parts.append(f"  [yellow]来源:[/yellow] {source}")
+
+        if line > 0 or col > 0:
+            location = []
+            if line > 0:
+                location.append(f"行 {line}")
+            if col > 0:
+                location.append(f"列 {col}")
+            error_parts.append(f"  [yellow]位置:[/yellow] {', '.join(location)}")
+
+        self.console.print("\n".join(error_parts))
 
     def _add_client_to_list(self, client_id: int, client_type: str) -> None:
         """Add a client to the appropriate list based on its type."""
