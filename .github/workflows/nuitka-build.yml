@@ -35,6 +35,7 @@ jobs:
             --mode=onefile `
             --include-package=websockets.asyncio `
             --include-package-data=pypinyin `
+            --include-package-data=jieba `
             --windows-icon-from-ico=realme_sheep_triangle.ico `
             --assume-yes-for-downloads `
             --output-filename=echo-client.exe `
