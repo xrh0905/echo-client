@@ -37,8 +37,9 @@
    或在源码仓库：
 
    ```powershell
-   poetry install
-   poetry run echo-client
+   python -m pip install --upgrade pip
+   pip install -r requirements.txt
+   python -m echo_client.cli
    ```
 
 首次启动会在工作目录生成 `config.yaml`。终端会打印监听地址、配置路径等提示。
@@ -143,8 +144,8 @@ echo-client 同时支持两套叠加格式：
 仓库内置 `build.spec` 与 `echo-client.spec`。使用 PyInstaller 打包：
 
 ```powershell
-poetry install  # 或 pip install 所需依赖
-pip install pyinstaller
+python -m pip install --upgrade pip
+pip install -r pyrequirements.txt
 pyinstaller --onefile --name echo-client build.spec
 # 或
 pyinstaller echo-client.spec
@@ -157,8 +158,9 @@ pyinstaller echo-client.spec
 ```powershell
 git clone https://github.com/xrh0905/echo-client.git
 cd echo-client
-poetry install
-poetry run echo-client
+python -m pip install --upgrade pip
+pip install -r pyrequirements.txt
+python -m echo_client.cli
 ```
 
 - 代码格式建议使用 `ruff`/`pylint` 等工具（仓库默认提供 `pylint`）。

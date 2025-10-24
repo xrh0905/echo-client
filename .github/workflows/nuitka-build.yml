@@ -27,16 +27,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install websockets rich pypinyin pyyaml jieba aiohttp
-          pip install markdown-it-py
-          pip install nuitka ordered-set zstandard
+          pip install -r pyrequirements.txt
 
       - name: Build with Nuitka
         run: |
           python -m nuitka `
             --standalone `
             --onefile `
-            --enable-plugin=anti-bloat `
+            --include-package-data=pypinyin `
             --windows-icon-from-ico=realme_sheep_triangle.ico `
             --assume-yes-for-downloads `
             --output-filename=echo-client.exe `
