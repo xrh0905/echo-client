@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import itertools
 import json
 import signal
 import unicodedata
-from typing import Any, Iterable, Optional
+from typing import Any, Awaitable, Iterable, Optional
 
 import websockets
 from rich.console import Console
@@ -43,6 +44,9 @@ class EchoServer:
         self._events: list[dict[str, Any]] = []
         self._client_ids = itertools.count(1)
         self._server: Any | None = None
+        self._connections: set[Any] = set()
+        self._input_task: asyncio.Task | None = None
+        self._server_wait_task: asyncio.Task | None = None
         self._heartbeat_counts: dict[int, int] = {}
         self._client_names: dict[int, str] = {}
         self._client_types: dict[int, str] = {}
@@ -87,9 +91,16 @@ class EchoServer:
         self.console.print("[blue]tips: 如果没有看到成功的连接请求，可以尝试刷新一下客户端[/blue]")
         self.console.print("[green]用户输入模块加载成功，您现在可以开始输入命令了，客户端连接后会自动执行！[/green]")
 
-        asyncio.create_task(self._run_input_loop())
+        self._input_task = asyncio.create_task(self._run_input_loop())
+        self._server_wait_task = asyncio.create_task(self._server.wait_closed())
 
-        await self._server.wait_closed()
+        try:
+            await self._server_wait_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await self._cancel_input_task()
+            self._server_wait_task = None
 
     async def shutdown(self) -> None:
         """Stop the websocket server."""
@@ -97,12 +108,30 @@ class EchoServer:
 
         if self._server is not None:
             self._server.close()
-            await self._server.wait_closed()
+            await self._close_all_clients()
+            wait_task = self._server_wait_task
+            if wait_task is not None:
+                if not wait_task.done():
+                    try:
+                        await asyncio.wait_for(wait_task, timeout=3)
+                    except asyncio.TimeoutError:
+                        self.console.print(
+                            "[red]关闭服务器超时，已有连接可能未正常断开，将强制终止。[/red]"
+                        )
+                        wait_task.cancel()
+                    except Exception:
+                        wait_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await wait_task
+            self._server_wait_task = None
+            self._server = None
+        await self._cancel_input_task()
         self._restore_sigint_guard()
 
     async def _handle_client(self, websocket: Any) -> None:
         client_id = next(self._client_ids)
         self.console.print(f"客户端{client_id}: 已建立连接")
+        self._connections.add(websocket)
         self._heartbeat_counts[client_id] = 0
         self._client_names[client_id] = f"客户端{client_id}"
         self._client_types[client_id] = "live"
@@ -126,6 +155,7 @@ class EchoServer:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            self._connections.discard(websocket)
             heartbeat_count = self._heartbeat_counts.pop(client_id, 0)
             client_name = self._client_names.pop(client_id, None)
             client_type = self._client_types.pop(client_id, None)
@@ -280,6 +310,60 @@ class EchoServer:
                 f"客户端{client_id}: 连接关闭过程中出现异常，可能已被客户端终止"
             )
 
+    async def _cancel_input_task(self) -> None:
+        task = self._input_task
+        if task is None or task.done():
+            self._input_task = None
+            return
+        if task is asyncio.current_task():
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        self._input_task = None
+
+    async def _close_all_clients(self) -> None:
+        if not self._connections:
+            return
+
+        async def _close_single(websocket: Any) -> None:
+            if self._connection_is_closed(websocket):
+                return
+            try:
+                await websocket.close(code=1001, reason="Server shutdown")
+            except websockets.exceptions.ConnectionClosed:
+                pass
+            except Exception:
+                return
+            wait_closed = getattr(websocket, "wait_closed", None)
+            awaitable: Awaitable[Any] | None = None
+            if callable(wait_closed):
+                closer = wait_closed()
+                if asyncio.isfuture(closer):
+                    awaitable = closer
+                elif inspect.isawaitable(closer):
+                    awaitable = asyncio.ensure_future(closer)
+            if awaitable is not None:
+                try:
+                    await asyncio.wait_for(awaitable, timeout=2)
+                    return
+                except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                    pass
+                except Exception:
+                    pass
+            transport = getattr(websocket, "transport", None)
+            if transport is not None:
+                transport.close()
+                abort = getattr(transport, "abort", None)
+                if callable(abort):
+                    abort()
+
+        await asyncio.gather(
+            *[_close_single(conn) for conn in list(self._connections)],
+            return_exceptions=True,
+        )
+        self._connections.clear()
+
     async def _run_input_loop(self) -> None:
         while True:
             try:
@@ -297,6 +381,8 @@ class EchoServer:
                 if not self._handle_keyboard_interrupt():
                     await self.shutdown()
                     break
+        if self._input_task is asyncio.current_task():
+            self._input_task = None
 
     async def _prompt_command(self, prompt: str) -> str:
         """Read a line from stdin without relying on prompt_toolkit."""
