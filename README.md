@@ -71,6 +71,7 @@
 | `auto_suffix` | `bool` | `true` | 是否自动为消息追加自定义结尾字符，`/suffix` 可切换或设置。|
 | `auto_suffix_value` | `str` | `喵` | 自动追加的结尾字符，`/suffix <字符>` 可修改。|
 | `inhibit_ctrl_c` | `bool` | `true` | 是否启用 `Ctrl+C` 退出保护，`/nocc` 可切换。|
+| `skip_mode` | `str` | `blank_text` | 跳过对话的模式，可选：`echo_next`（发送 echo_next 停止输出）、`blank_text`（推送空白文本到 live 组）、`hide_display`（发送隐藏 live 指令）。|
 
 每次通过命令修改都会即时落盘。手动编辑文件后无需重启即可生效（下一条消息时加载）。
 
@@ -95,7 +96,8 @@
 | `/nocc [on|off]` | `/noc` | 无参时切换 Ctrl+C 退出保护；可用 `on/off` 显式设置状态。|
 | `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
 | `/brackets` | `/ub`, `/tub` | 切换是否用 `【】` 包裹用户名。|
-| `/skip` | `/cancel` | 立即广播 `echo_next` 指令，促使对话框播放下一条消息。|
+| `/skip` | `/cancel` | 根据 `skip_mode` 配置跳过当前对话。支持三种模式：`echo_next`（停止输出）、`blank_text`（发送空白文本，默认）、`hide_display`（隐藏显示）。|
+| `/clear` | `/clr`, `/cls` | 清空历史记录框。|
 | `/source <file>` | `/src`, `/load` | 按行执行脚本文件中的指令。|
 
 > 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
