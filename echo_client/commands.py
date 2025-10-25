@@ -257,6 +257,14 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
             description="从文件执行批量命令",
             legacy_aliases=("s",),
         ),
+        CommandSpec(
+            name="reload",
+            aliases=("rl",),
+            handler=server._cmd_reload,
+            min_args=0,
+            max_args=1,
+            description="重新加载配置文件，默认热重载（不重启服务器），使用 'warm' 参数进行温重载（重启服务器）",
+        ),
     )
 
 

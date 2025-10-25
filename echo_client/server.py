@@ -60,6 +60,7 @@ class EchoServer:
         self._sigint_guard_active = False
         self._sigint_original: Any | None = None
         self._sigint_suppressed = False
+        self._restart_requested = False
         self._command_catalog: CommandCatalog | None = None
         self._command_specs: tuple[CommandSpec, ...] = ()
         self._sync_sigint_guard()
@@ -127,6 +128,47 @@ class EchoServer:
             self._server = None
         await self._cancel_input_task()
         self._restore_sigint_guard()
+
+    async def _restart_server(self) -> None:
+        """Restart the WebSocket server after warm reload."""
+        try:
+            # Close the current server
+            if self._server is not None:
+                self._server.close()
+                await self._close_all_clients()
+                wait_task = self._server_wait_task
+                if wait_task is not None and not wait_task.done():
+                    try:
+                        await asyncio.wait_for(wait_task, timeout=3)
+                    except asyncio.TimeoutError:
+                        self.console.print("[yellow]关闭服务器超时，将强制重启。[/yellow]")
+                        wait_task.cancel()
+                    except Exception:
+                        wait_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await wait_task
+                self._server_wait_task = None
+                self._server = None
+
+            # Small delay to ensure clean shutdown
+            await asyncio.sleep(0.5)
+
+            # Start the new server
+            host = self.config["host"]
+            port = self.config["port"]
+
+            self._server = await websockets.serve(self._handle_client, host, port)
+
+            self.console.print(
+                f"[green]服务器已重启，正在 {host}:{port} 监听 websocket 请求。[/green]"
+            )
+            self.console.print("[blue]tips: 客户端需要重新连接。[/blue]")
+
+            self._server_wait_task = asyncio.create_task(self._server.wait_closed())
+        except Exception as e:
+            self.console.print(f"[red]服务器重启失败: {e}[/red]")
+            self.console.print("[yellow]请手动重启程序。[/yellow]")
+
 
     async def _handle_client(self, websocket: Any) -> None:
         client_id = next(self._client_ids)
@@ -459,6 +501,68 @@ class EchoServer:
 
     def _cmd_source(self, args: list[str]) -> bool:
         self._execute_source_file(args[0])
+        return True
+
+    def _cmd_reload(self, args: list[str]) -> bool:
+        """Reload configuration file - hot reload (no server restart) or warm reload (with restart)."""
+        mode = args[0].lower() if args else "hot"
+
+        if mode not in {"hot", "warm"}:
+            self.console.print("[red]无效的重载模式，请使用 'hot' 或 'warm'。[/red]")
+            return True
+
+        if mode == "warm":
+            return self._cmd_reload_warm()
+
+        # Hot reload: reload config without restarting server
+        old_config = self.config.copy()
+        self.config = load_config(self.console)
+
+        # Sync runtime state based on new config
+        self._sync_sigint_guard()
+
+        # Report what changed
+        changed_keys = []
+        for key, value in self.config.items():
+            if key not in old_config or old_config[key] != value:
+                changed_keys.append(key)
+
+        if changed_keys:
+            self.console.print(f"[green]配置已重新加载（热重载），更新了以下配置项: {', '.join(changed_keys)}[/green]")
+        else:
+            self.console.print("[green]配置已重新加载（热重载），无变更。[/green]")
+
+        return True
+
+    def _cmd_reload_warm(self) -> bool:
+        """Reload configuration and restart WebSocket server."""
+        self.console.print("[yellow]正在执行温重载，将重启 WebSocket 服务器...[/yellow]")
+
+        # Store current config before reloading
+        old_host = self.config.get("host")
+        old_port = self.config.get("port")
+
+        # Reload config
+        self.config = load_config(self.console)
+
+        # Check if host/port changed
+        new_host = self.config.get("host")
+        new_port = self.config.get("port")
+
+        if old_host != new_host or old_port != new_port:
+            self.console.print(
+                f"[yellow]检测到服务器地址变更: {old_host}:{old_port} -> {new_host}:{new_port}[/yellow]"
+            )
+
+        # Sync runtime state
+        self._sync_sigint_guard()
+
+        self.console.print("[green]配置已重新加载（温重载）。[/green]")
+        self.console.print("[blue]提示: 温重载会断开所有客户端连接，服务器将立即重启。[/blue]")
+
+        # Schedule an async task to restart the server
+        asyncio.create_task(self._restart_server())
+
         return True
 
     def _cmd_set_print_speed(self, args: list[str]) -> bool:
