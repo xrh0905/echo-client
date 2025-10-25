@@ -74,7 +74,7 @@
 | `inhibit_ctrl_c` | `bool` | `true` | 是否启用 `Ctrl+C` 退出保护，`/nocc` 可切换。|
 | `skip_mode` | `str` | `blank_text` | 跳过对话的模式，可选：`echo_next`（发送 echo_next 停止输出）、`blank_text`（推送空白文本到 live 组）、`hide_display`（发送隐藏 live 指令）。|
 
-每次通过命令修改都会即时落盘。手动编辑文件后无需重启即可生效（下一条消息时加载）。
+每次通过命令修改都会即时落盘。手动编辑文件后，可使用 `/reload` 命令热重载配置（不重启服务器），或使用 `/reload warm` 温重载（重启服务器）。
 
 
 ## ⌨️ 命令与快捷键
@@ -100,6 +100,7 @@
 | `/skip` | `/cancel` | 根据 `skip_mode` 配置跳过当前对话。支持三种模式：`echo_next`（停止输出）、`blank_text`（发送空白文本，默认）、`hide_display`（隐藏显示）。|
 | `/clear` | `/clr`, `/cls` | 清空历史记录框。|
 | `/source <file>` | `/src`, `/load` | 按行执行脚本文件中的指令。|
+| `/reload [hot|warm]` | `/rl` | 重新加载配置文件。默认为热重载（`hot`），不重启服务器；使用 `warm` 参数时会重启 WebSocket 服务器。|
 
 > 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
 > 使用 `/help` 可查看命令列表，并随时了解各开关的当前状态。
