@@ -41,11 +41,22 @@ jobs:
           name: echo-client-pyinstaller-windows-${{ github.sha }}
           path: dist/echo-client.exe
 
+      - name: Generate Changelog
+        if: startsWith(github.ref, 'refs/tags/')
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          configuration: ".github/changelog-config.json"
+          ignorePreReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
           files: dist/echo-client.exe
+          body: ${{ steps.changelog.outputs.changelog }}
           draft: false
           prerelease: false
         env:
