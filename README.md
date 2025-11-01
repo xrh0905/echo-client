@@ -172,5 +172,18 @@ python -m echo_client.cli
 - **打字机太慢/太快**：通过 `/ps <毫秒>` 即时调整打印速度，或修改 `config.yaml` 后重启。
 - **想要批量发送**：将指令写入文本文件后使用 `/source your_file.txt`（亦可使用别名 `/src`）。
 
+## 🙏 致谢与鸣谢
+
+本项目基于以下优秀的开源项目和贡献者：
+
+- **原始 echo-client 项目**: 由 [Rickyxrc](https://github.com/Rickyxrc) 创建和开发。感谢原作者的创意和基础实现。
+  - 原始仓库: [Rickyxrc/echo-client](https://github.com/Rickyxrc/echo-client)
+  
+- **Echo-Live 项目**: 由 [sheep-realms](https://github.com/sheep-realms) 开发的强大字幕展示系统，为本工具提供了核心的 WebSocket 广播协议和字幕渲染能力。
+  - 项目地址: [sheep-realms/Echo-Live](https://github.com/sheep-realms/Echo-Live)
+  - 官方文档: [Echo-Live Documentation](https://echo-live-doc.pages.dev/)
+
+感谢所有为这些项目做出贡献的开发者和社区成员！
+
 欢迎通过 issue、讨论区或 PR 分享使用心得与改进建议！
 
