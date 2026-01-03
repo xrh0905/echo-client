@@ -76,7 +76,7 @@
 | `inhibit_ctrl_c` | `bool` | `true` | 是否启用 `Ctrl+C` 退出保护，`/nocc` 可切换。|
 | `skip_mode` | `str` | `blank_text` | 跳过对话的模式，可选：`echo_next`（发送 echo_next 停止输出）、`blank_text`（推送空白文本到 live 组）、`hide_display`（发送隐藏 live 指令）。|
 
-每次通过命令修改都会即时落盘。手动编辑文件后无需重启即可生效（下一条消息时加载）。
+每次通过命令修改都会即时落盘。手动编辑文件后，可使用 `/reload` 命令热重载配置（不重启服务器），或使用 `/reload warm` 温重载（重启服务器）。
 
 
 ## ⌨️ 命令与快捷键
@@ -102,6 +102,7 @@
 | `/skip` | `/cancel` | 根据 `skip_mode` 配置跳过当前对话。支持三种模式：`echo_next`（停止输出）、`blank_text`（发送空白文本，默认）、`hide_display`（隐藏显示）。|
 | `/clear` | `/clr`, `/cls` | 清空历史记录框。|
 | `/source <file>` | `/src`, `/load` | 按行执行脚本文件中的指令。|
+| `/reload [hot|warm]` | `/rl` | 重新加载配置文件。默认为热重载（`hot`），不重启服务器；使用 `warm` 参数时会重启 WebSocket 服务器。|
 
 > 想发送以 `/` 开头的纯文本，可输入 `//这是内容`，程序会自动转换。
 > 使用 `/help` 可查看命令列表，并随时了解各开关的当前状态。
@@ -172,6 +173,19 @@ python -m echo_client.cli
 - **消息没有格式效果**：确保 Echo-live 版本支持传入的字段；`@` 快捷码与 Markdown 可叠加使用。
 - **打字机太慢/太快**：通过 `/ps <毫秒>` 即时调整打印速度，或修改 `config.yaml` 后重启。
 - **想要批量发送**：将指令写入文本文件后使用 `/source your_file.txt`（亦可使用别名 `/src`）。
+
+## 🙏 致谢与鸣谢
+
+本项目基于以下优秀的开源项目和贡献者：
+
+- **原始 echo-client 项目**: 由 [Rickyxrc](https://github.com/Rickyxrc) 创建和开发。感谢原作者的创意和基础实现。
+  - 原始仓库: [Rickyxrc/echo-client](https://github.com/Rickyxrc/echo-client)
+  
+- **Echo-Live 项目**: 由 [sheep-realms](https://github.com/sheep-realms) 开发的强大字幕展示系统，为本工具提供了核心的 WebSocket 广播协议和字幕渲染能力。
+  - 项目地址: [sheep-realms/Echo-Live](https://github.com/sheep-realms/Echo-Live)
+  - 官方文档: [Echo-Live Documentation](https://echo-live-doc.pages.dev/)
+
+感谢所有为这些项目做出贡献的开发者和社区成员！
 
 欢迎通过 issue、讨论区或 PR 分享使用心得与改进建议！
 
