@@ -66,10 +66,12 @@
 | `autopausestr` | `str` | `,，.。;；:：!！` | 触发停顿的字符集合。|
 | `autopausetime` | `int` | `10` | 停顿时长单位，取决于打印速度。|
 | `print_speed` | `int` | `10` | 默认打印速度（毫秒/字符），`/speed <value>`（或 `/ps`）可调整。|
-| `auto_quotes` | `bool` | `true` | 是否自动为每条消息添加一对双引号，`/quotes`（或 `/tq`）可切换。|
+| `quote_style` | `str` | `en` | 自动引号样式，可选 `en`（英文双引号）、`cn`（中文书名号）、`jp`（日式括号）、`custom`（使用下方自定义的左右符号）、`none`（禁用）。通过 `/quote <style>` 修改。|
+| `quote_custom_left` | `str` | `""` | 自定义左引号，仅在 `quote_style` 设置为 `custom` 时生效。|
+| `quote_custom_right` | `str` | `""` | 自定义右引号，仅在 `quote_style` 设置为 `custom` 时生效。|
 | `auto_parentheses` | `bool` | `false` | 是否自动用圆括号包裹消息，可用 `/paren` 切换或 `/paren once` 仅对下一条生效。|
-| `username_brackets` | `bool` | `false` | 是否使用 `【】` 包裹用户名，`/brackets`（或 `/ub`）可切换。|
-| `auto_suffix` | `bool` | `true` | 是否自动为消息追加自定义结尾字符，`/suffix` 可切换或设置。|
+| `username_brackets` | `bool` | `true` | 是否使用 `【】` 包裹用户名，`/brackets`（或 `/ub`）可切换。|
+| `auto_suffix` | `bool` | `false` | 是否自动为消息追加自定义结尾字符，`/suffix` 可切换或设置。|
 | `auto_suffix_value` | `str` | `喵` | 自动追加的结尾字符，`/suffix <字符>` 可修改。|
 | `inhibit_ctrl_c` | `bool` | `true` | 是否启用 `Ctrl+C` 退出保护，`/nocc` 可切换。|
 | `skip_mode` | `str` | `blank_text` | 跳过对话的模式，可选：`echo_next`（发送 echo_next 停止输出）、`blank_text`（推送空白文本到 live 组）、`hide_display`（发送隐藏 live 指令）。|
@@ -92,7 +94,7 @@
 | `/typewrite` | `/tt` | 切换 Typewriting 效果。|
 | `/scheme` | `/ts` | 在拼音与注音模式之间切换 Typewriting。|
 | `/autopause` | `/ta` | 切换自动停顿。|
-| `/quotes` | `/tq` | 切换是否自动为消息添加双引号。|
+| `/quote <style> [left] [right]` | `/quotes`, `/tq` | 设置自动引号样式，`style` 可为 `en`/`cn`/`jp`/`custom`/`none`；`custom` 模式需额外提供左右引号，`none` 禁用自动引号。|
 | `/suffix [on|off|文本…]` | `/tsuf` | 无参时切换自动结尾；`on/off` 指定状态；其余内容将作为新的结尾文本，可包含空格。|
 | `/nocc [on|off]` | `/noc` | 无参时切换 Ctrl+C 退出保护；可用 `on/off` 显式设置状态。|
 | `/paren [once|on|off]` | `/tp` | 无参时切换圆括号包装；`once` 仅让下一条消息生效；`on/off` 显式设置。|
@@ -130,7 +132,7 @@ echo-client 同时支持两套叠加格式：
 /s message_sample.txt
 ```
 
-> 默认会为消息自动添加一对双引号；可通过命令或配置关闭，或进一步叠加圆括号包装。
+> 默认会为消息自动添加一对双引号；使用 `/quote none` 禁用，或选择 `cn`/`jp`/`custom` 样式（`custom` 可配合 `quote_custom_left/right`）改变配对符号，圆括号可另行叠加。
 
 ## 🤖 自动停顿与打字机
 

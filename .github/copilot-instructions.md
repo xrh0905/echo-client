@@ -253,7 +253,8 @@ The application uses YAML-based configuration stored in `config.yaml`:
 - **Server Settings**: `host` (default: 127.0.0.1), `port` (default: 3000)
 - **Display Settings**: `username`, `username_brackets`
 - **Typewriting**: `typewriting`, `typewriting_scheme` (pinyin/zhuyin), `print_speed`
-- **Auto Features**: `autopause`, `auto_quotes`, `auto_parentheses`, `auto_suffix`
+- **Auto Features**: `autopause`, `quote_style`, `auto_parentheses`, `auto_suffix`
+- **Custom Quotes**: `quote_custom_left`, `quote_custom_right` (仅在 `quote_style=custom` 时生效)
 - **Control**: `inhibit_ctrl_c`, `command_prefix` (default: `/`)
 
 Configuration is hot-reloaded on each message send, allowing runtime modifications.

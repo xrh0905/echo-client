@@ -503,14 +503,6 @@ class EchoServer:
         )
         return True
 
-    def _cmd_toggle_quotes(self, _args: list[str]) -> bool:
-        self.config["auto_quotes"] = not self.config.get("auto_quotes", True)
-        self._persist_config()
-        self.console.print(
-            f"[green]自动双引号包装当前状态: {self.config['auto_quotes']}[/green]"
-        )
-        return True
-
     def _cmd_suffix(self, args: list[str]) -> bool:
         if not args:
             new_state = not self.config.get("auto_suffix", True)
@@ -538,6 +530,56 @@ class EchoServer:
         self.config["auto_suffix_value"] = suffix_value
         self._persist_config()
         self.console.print(f"[green]自动结尾字符已设置为 {suffix_value}[/green]")
+        return True
+
+    def _cmd_quote(self, args: list[str]) -> bool:
+        if not args:
+            self.console.print(f"[blue]当前自动引号样式: {self._quote_style_label()}[/blue]")
+            self.console.print("[blue]用法: /quote <en|cn|jp|custom|none> [left] [right][/blue]")
+            self.console.print("[blue]none 模式会禁用自动引号（等效于旧 /quotes off）[/blue]")
+            self.console.print("[blue]自定义模式示例: /quote custom 『 』[/blue]")
+            return True
+
+        style = args[0].lower()
+        if style == "none":
+            self.config["quote_style"] = "none"
+            self.config["quote_custom_left"] = ""
+            self.config["quote_custom_right"] = ""
+            self._persist_config()
+            self.console.print("[green]自动引号功能已禁用（none）[/green]")
+            return True
+
+        if style in {"en", "cn", "jp"}:
+            self.config["quote_style"] = style
+            self._persist_config()
+            self.console.print(f"[green]自动引号样式已设置为 {self._quote_style_label()}[/green]")
+            return True
+
+        if style in {"custom", "special"}:
+            left = args[1] if len(args) > 1 else None
+            right = args[2] if len(args) > 2 else None
+            stored_left = str(self.config.get("quote_custom_left", "") or "")
+            stored_right = str(self.config.get("quote_custom_right", "") or "")
+            if left is None and right is None and stored_left and stored_right:
+                left = stored_left
+                right = stored_right
+
+            if left is None or right is None:
+                self.console.print("[red]custom 模式需要同时传入左右引号，例如: /quote custom 『 』[/red]")
+                return True
+
+            if not left.strip() or not right.strip():
+                self.console.print("[red]自定义引号左右部分不能为空。[/red]")
+                return True
+
+            self.config["quote_style"] = "custom"
+            self.config["quote_custom_left"] = left
+            self.config["quote_custom_right"] = right
+            self._persist_config()
+            self.console.print(f"[green]自动引号样式已设置为 custom（{left}{right}）[/green]")
+            return True
+
+        self.console.print("[red]无效引号样式，可用 en/cn/jp/custom/none。[/red]")
         return True
 
     def _cmd_parentheses(self, args: list[str]) -> bool:
@@ -762,8 +804,9 @@ class EchoServer:
 
     def _decorate_outgoing_text(self, text: str) -> str:
         result = text
-        if self.config.get("auto_quotes", True) and not self._is_wrapped(result, '"', '"'):
-            result = f'"{result}"'
+        left_quote, right_quote = self._quote_pair()
+        if left_quote and right_quote and not self._is_wrapped(result, left_quote, right_quote):
+            result = f"{left_quote}{result}{right_quote}"
 
         apply_parentheses = self.config.get("auto_parentheses", False) or self._parentheses_once
         if apply_parentheses and not self._is_wrapped(result, "(", ")"):
@@ -771,6 +814,37 @@ class EchoServer:
 
         self._parentheses_once = False
         return result
+
+    def _quote_style_label(self) -> str:
+        style = str(self.config.get("quote_style", "en") or "en").lower()
+        if style == "none":
+            return "none（禁用自动引号）"
+        if style == "cn":
+            return "cn “ ”"
+        if style == "jp":
+            return "jp 『 』"
+        if style == "custom":
+            left = str(self.config.get("quote_custom_left", "") or "")
+            right = str(self.config.get("quote_custom_right", "") or "")
+            if left and right:
+                return f"custom（{left}{right}）"
+            return "custom（未配置）"
+        return "en \"\""
+
+    def _quote_pair(self) -> tuple[str, str]:
+        style = str(self.config.get("quote_style", "en") or "en").lower()
+        if style == "none":
+            return "", ""
+        if style == "cn":
+            return "“", "”"
+        if style == "jp":
+            return "『", "』"
+        if style == "custom":
+            left = str(self.config.get("quote_custom_left", "") or "")
+            right = str(self.config.get("quote_custom_right", "") or "")
+            if left and right:
+                return left, right
+        return '"', '"'
 
     def _apply_auto_suffix(self, text: str) -> str:
         if not isinstance(text, str) or text == "":

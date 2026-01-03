@@ -133,6 +133,9 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
         display = value if value else "(空)"
         return f"开启（{display}）"
 
+    def quote_style_status(srv: "EchoServer") -> str:
+        return srv._quote_style_label()
+
     return (
         CommandSpec(
             name="help",
@@ -193,14 +196,6 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
             status_getter=bool_status("autopause", False),
         ),
         CommandSpec(
-            name="quotes",
-            aliases=("tq",),
-            handler=server._cmd_toggle_quotes,
-            description="切换是否自动为消息添加双引号",
-            legacy_aliases=("toggle-quotes",),
-            status_getter=bool_status("auto_quotes", True),
-        ),
-        CommandSpec(
             name="suffix",
             aliases=("tsuf",),
             handler=server._cmd_suffix,
@@ -208,6 +203,15 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
             max_args=None,
             description="配置自动结尾字符，省略参数时切换开关，on/off 指定状态，其他内容将作为新的结尾文本",
             status_getter=suffix_status,
+        ),
+        CommandSpec(
+            name="quote",
+            aliases=("quotes", "tq"),
+            handler=server._cmd_quote,
+            min_args=0,
+            max_args=None,
+            description="配置自动引号样式（en/cn/jp/custom/none）",
+            status_getter=quote_style_status,
         ),
         CommandSpec(
             name="paren",

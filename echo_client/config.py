@@ -25,7 +25,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "autopausestr": ",，.。;；:：!！",
     "autopausetime": 10,
     "print_speed": 10,
-    "auto_quotes": True,
+    "quote_style": "en",
+    "quote_custom_left": "",
+    "quote_custom_right": "",
     "auto_parentheses": False,
     "username_brackets": True,
     "inhibit_ctrl_c": True,
@@ -82,6 +84,11 @@ def load_config(console: Optional[Console] = None) -> Dict[str, Any]:
 
     config: Dict[str, Any] = DEFAULT_CONFIG.copy()
     config.update(data)
+
+    legacy_auto_quotes = data.get("auto_quotes")
+    if legacy_auto_quotes is not None and "quote_style" not in data:
+        config["quote_style"] = "en" if bool(legacy_auto_quotes) else "none"
+    config.pop("auto_quotes", None)
 
     if not path.exists() or data != config:
         _write_config(path, config)
