@@ -229,8 +229,12 @@ def _apply_fast_formatting(text: str, base_style: Dict[str, Any]) -> List[Dict[s
                 prefixless = True
                 pos += 1
             start = pos
-            while pos < length and not text[pos].isspace() and text[pos] != "@":
-                pos += 1
+            closing = text.find(">", pos)
+            if closing != -1:
+                pos = closing
+            else:
+                while pos < length and not text[pos].isspace() and text[pos] != "@":
+                    pos += 1
             classname = text[start:pos]
             if not classname:
                 handled = False
@@ -238,7 +242,7 @@ def _apply_fast_formatting(text: str, base_style: Dict[str, Any]) -> List[Dict[s
                 resolved = classname if prefixless else f"echo-text-{classname}"
                 if resolved not in active_classes:
                     active_classes.append(resolved)
-                index = pos
+                index = pos + 1 if closing != -1 else pos
         else:
             handled = False
 

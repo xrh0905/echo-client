@@ -16,8 +16,8 @@ Echo Client is a command-line console tool designed for the Echo-live/OBS workfl
 
 ## Key Technologies
 
-- **Language**: Python 3.9+
-- **WebSocket Server**: `websockets` library (asyncio-based)
+- **Language**: Python 3.12+
+- **WebSocket/HTTP Server**: `aiohttp` web application with WebSocket routes
 - **CLI Framework**: `rich` for terminal UI
 - **Chinese Processing**: `jieba` for word segmentation, `pypinyin` for pinyin conversion
 - **Markdown Parsing**: `markdown-it-py`
@@ -317,13 +317,12 @@ Currently, the project does not have automated unit tests. Testing is done manua
 
 - Keep Poetry dependencies updated via `poetry update`
 - Major dependencies:
-  - `websockets ^12.0` - WebSocket server
-  - `rich ^13.7.0` - Terminal UI
-  - `pypinyin ^0.50.0` - Pinyin conversion
+  - `aiohttp ^3.11.0` - WebSocket and HTTP server
+  - `rich ^14.0.0` - Terminal UI
+  - `pypinyin ^0.55.0` - Pinyin conversion
   - `pyyaml ^6.0.1` - Config parsing
   - `jieba ^0.42.1` - Chinese segmentation
   - `markdown-it-py ^3.0.0` - Markdown parsing
-  - `aiohttp ^3.9.0` - Async HTTP (if needed)
 
 ## Internationalization
 

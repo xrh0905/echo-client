@@ -28,14 +28,27 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install . pytest
           pip install -r pyrequirements.txt
+
+      - name: Read package version
+        shell: pwsh
+        run: |
+          $version = python -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['tool']['poetry']['version'])"
+          "ECHO_CLIENT_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Verify package
+        run: |
+          python -m compileall echo_client main.py
+          python -m pytest
+          python -m pip install .
 
       - name: Build with Nuitka
         run: |
           python -m nuitka `
             --mode=onefile `
             --onefile-child-grace-time=infinity `
-            --include-package=websockets.asyncio `
+            --include-package=aiohttp `
             --include-package-data=pypinyin `
             --include-package-data=jieba `
             --windows-icon-from-ico=realme_sheep_triangle.ico `
@@ -45,8 +58,8 @@ jobs:
             --remove-output `
             --company-name="Echo-Client" `
             --product-name="Echo Client" `
-            --file-version="0.1.0" `
-            --product-version="0.1.0" `
+            --file-version="${{ env.ECHO_CLIENT_VERSION }}" `
+            --product-version="${{ env.ECHO_CLIENT_VERSION }}" `
             --file-description="Echo-live WebSocket CLI Server" `
             --lto=yes `
             --jobs=4 `

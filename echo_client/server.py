@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
-import itertools
 import json
+from pathlib import Path
 import signal
 import unicodedata
-from typing import Any, Awaitable, Iterable, Optional
+from typing import Any, Iterable
 
-import websockets
+from aiohttp import WSCloseCode, WSMsgType, web
 from rich.console import Console
 from rich.table import Table
 
@@ -23,6 +22,7 @@ from .commands import (
     format_aliases,
 )
 from .config import load_config, save_config
+from .connection import ConnectionManager, connection_is_closed
 from .message import (
     apply_autopause,
     format_username,
@@ -31,32 +31,61 @@ from .message import (
     parse_message,
     render,
 )
+from .protocol import (
+    PING_PAYLOAD,
+    BroadcastEnvelope,
+    ClientSession,
+    ClientType,
+    OutgoingEvent,
+    SkipMode,
+    effective_client_type,
+    normalize_client_type,
+    normalize_skip_mode,
+    normalize_target_types,
+    parse_envelope,
+)
 
-PING_PAYLOAD = json.dumps({"action": "ping", "data": {}}, ensure_ascii=False)
+
+class AiohttpWebSocketAdapter:
+    """Adapter exposing aiohttp WebSocket connections through the internal transport API."""
+
+    def __init__(self, websocket: web.WebSocketResponse) -> None:
+        self._websocket = websocket
+
+    @property
+    def closed(self) -> bool:
+        return self._websocket.closed
+
+    async def send(self, payload: str) -> None:
+        await self._websocket.send_str(payload)
+
+    async def close(self, code: int, reason: str) -> None:
+        await self._websocket.close(code=code, message=reason.encode("utf-8"))
+
+    async def iter_text(self):
+        async for message in self._websocket:
+            if message.type is WSMsgType.TEXT:
+                yield message.data
+            elif message.type is WSMsgType.ERROR:
+                raise RuntimeError(f"websocket error: {self._websocket.exception()}")
+            elif message.type in {WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED}:
+                break
 
 
 class EchoServer:
-    """Orchestrates the websocket server and console interaction."""
+    """Orchestrates the websocket server and the console interaction."""
 
     def __init__(self, console: Console | None = None) -> None:
         self.console = console or Console()
         self.config = load_config(self.console)
-        self._events: list[dict[str, Any]] = []
-        self._client_ids = itertools.count(1)
-        self._server: Any | None = None
-        self._connections: set[Any] = set()
+        self._app: web.Application | None = None
+        self._runner: web.AppRunner | None = None
+        self._site: web.TCPSite | None = None
         self._input_task: asyncio.Task | None = None
         self._server_wait_task: asyncio.Task | None = None
-        self._heartbeat_counts: dict[int, int] = {}
-        self._client_names: dict[int, str] = {}
-        self._client_types: dict[int, str] = {}
-        self._live_display_visibility: dict[int, bool] = {}
-        self._graceful_disconnect_requests: dict[int, bool] = {}
-        # Three lists to manage different client types
-        self._history_clients: list[int] = []
-        self._live_clients: list[int] = []
-        self._editor_clients: list[int] = []
-        self._parentheses_once: bool = False
+        self._stop_event: asyncio.Event | None = None
+        self._connections = ConnectionManager()
+        self._parentheses_once = False
         self._sigint_guard_active = False
         self._sigint_original: Any | None = None
         self._sigint_suppressed = False
@@ -84,7 +113,8 @@ class EchoServer:
         host = self.config["host"]
         port = self.config["port"]
 
-        self._server = await websockets.serve(self._handle_client, host, port)
+        self._stop_event = asyncio.Event()
+        await self._start_site(host, port)
 
         self.console.print(
             f"[green]已经在 {host}:{port} 监听 websocket 请求，等待 echo 客户端接入...[/green]"
@@ -93,154 +123,145 @@ class EchoServer:
         self.console.print("[green]用户输入模块加载成功，您现在可以开始输入命令了，客户端连接后会自动执行！[/green]")
 
         self._input_task = asyncio.create_task(self._run_input_loop())
-        self._server_wait_task = asyncio.create_task(self._server.wait_closed())
 
         try:
-            await self._server_wait_task
+            await self._stop_event.wait()
         except asyncio.CancelledError:
             pass
         finally:
             await self._cancel_input_task()
+            await self._stop_site()
             self._server_wait_task = None
 
     async def shutdown(self) -> None:
-        """Stop the websocket server."""
+        """Stop the websocket server and all connected clients."""
         self.console.print("[yellow]正在关闭服务器……[/yellow]")
 
-        if self._server is not None:
-            self._server.close()
-            await self._close_all_clients()
-            wait_task = self._server_wait_task
-            if wait_task is not None:
-                if not wait_task.done():
-                    try:
-                        await asyncio.wait_for(wait_task, timeout=3)
-                    except asyncio.TimeoutError:
-                        self.console.print(
-                            "[red]关闭服务器超时，已有连接可能未正常断开，将强制终止。[/red]"
-                        )
-                        wait_task.cancel()
-                    except Exception:
-                        wait_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await wait_task
-            self._server_wait_task = None
-            self._server = None
+        await self._close_all_clients()
+        await self._stop_site()
+        if self._stop_event is not None:
+            self._stop_event.set()
         await self._cancel_input_task()
         self._restore_sigint_guard()
 
     async def _restart_server(self) -> None:
-        """Restart the WebSocket server after warm reload."""
+        """Restart the WebSocket server after a warm reload."""
         try:
-            # Close the current server
-            if self._server is not None:
-                self._server.close()
-                await self._close_all_clients()
-                wait_task = self._server_wait_task
-                if wait_task is not None and not wait_task.done():
-                    try:
-                        await asyncio.wait_for(wait_task, timeout=3)
-                    except asyncio.TimeoutError:
-                        self.console.print("[yellow]关闭服务器超时，将强制重启。[/yellow]")
-                        wait_task.cancel()
-                    except Exception:
-                        wait_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await wait_task
-                self._server_wait_task = None
-                self._server = None
+            await self._close_all_clients()
+            await self._stop_site()
 
-            # Small delay to ensure clean shutdown
             await asyncio.sleep(0.5)
-
-            # Start the new server
             host = self.config["host"]
             port = self.config["port"]
+            await self._start_site(host, port)
 
-            self._server = await websockets.serve(self._handle_client, host, port)
-
-            self.console.print(
-                f"[green]服务器已重启，正在 {host}:{port} 监听 websocket 请求。[/green]"
-            )
+            self.console.print(f"[green]服务器已重启，正在 {host}:{port} 监听 websocket 请求。[/green]")
             self.console.print("[blue]tips: 客户端需要重新连接。[/blue]")
-
-            self._server_wait_task = asyncio.create_task(self._server.wait_closed())
-        except Exception as e:
-            self.console.print(f"[red]服务器重启失败: {e}[/red]")
+        except Exception as exc:
+            self.console.print(f"[red]服务器重启失败: {exc}[/red]")
             self.console.print("[yellow]请手动重启程序。[/yellow]")
 
+    def _create_app(self) -> web.Application:
+        app = web.Application()
+        self._register_routes(app)
+        return app
 
-    async def _handle_client(self, websocket: Any) -> None:
-        client_id = next(self._client_ids)
+    def _register_routes(self, app: web.Application) -> None:
+        app.router.add_get("/", self._websocket_handler)
+        app.router.add_get("/ws", self._websocket_handler)
+        app.router.add_get("/healthz", self._health_handler)
+
+    async def _start_site(self, host: str, port: int) -> None:
+        self._app = self._create_app()
+        self._runner = web.AppRunner(self._app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, host, port)
+        await self._site.start()
+
+    async def _stop_site(self) -> None:
+        runner = self._runner
+        if runner is not None:
+            await runner.cleanup()
+        self._site = None
+        self._runner = None
+        self._app = None
+
+    async def _health_handler(self, _request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "status": "ok",
+                "connections": len(self._connections.sessions),
+                "host": self.config.get("host"),
+                "port": self.config.get("port"),
+            }
+        )
+
+    async def _websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
+        websocket = web.WebSocketResponse()
+        await websocket.prepare(request)
+        await self._handle_client(AiohttpWebSocketAdapter(websocket))
+        return websocket
+
+    async def _handle_client(self, websocket: AiohttpWebSocketAdapter) -> None:
+        session = self._connections.register(websocket)
+        client_id = session.client_id
         self.console.print(f"客户端{client_id}: 已建立连接")
-        self._connections.add(websocket)
-        self._heartbeat_counts[client_id] = 0
-        self._client_names[client_id] = f"客户端{client_id}"
-        self._client_types[client_id] = "live"
-        self._add_client_to_list(client_id, "live")
         self._report_client_groups()
-        self._live_display_visibility[client_id] = False
-        self._graceful_disconnect_requests[client_id] = False
 
-        listener = asyncio.create_task(self._pump_events(websocket, client_id))
-        receiver = asyncio.create_task(self._receive_messages(websocket, client_id))
-
-        disconnect_reason: Optional[str] = None
+        sender = asyncio.create_task(self._send_events(session))
+        receiver = asyncio.create_task(self._receive_messages(session))
+        disconnect_reason: str | None = None
 
         try:
             await websocket.send(PING_PAYLOAD)
-            await asyncio.gather(listener, receiver)
-        except websockets.exceptions.ConnectionClosed as exc:
-            disconnect_reason = f"代码 {exc.code}" if hasattr(exc, "code") else "异常关闭"
+            done, pending = await asyncio.wait(
+                {sender, receiver},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                if exc is not None:
+                    disconnect_reason = str(exc) or "异常关闭"
+            for task in pending:
+                task.cancel()
+        except (ConnectionResetError, RuntimeError) as exc:
+            disconnect_reason = str(exc) or "异常关闭"
         finally:
-            for task in (listener, receiver):
+            for task in (sender, receiver):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
-            self._connections.discard(websocket)
-            heartbeat_count = self._heartbeat_counts.pop(client_id, 0)
-            client_name = self._client_names.pop(client_id, None)
-            client_type = self._client_types.pop(client_id, None)
-            self._live_display_visibility.pop(client_id, None)
-            graceful = self._graceful_disconnect_requests.pop(client_id, False)
-
-            # Remove client from appropriate list
-            self._remove_client_from_lists(client_id)
+            removed = self._connections.unregister(client_id) or session
             self._report_client_groups()
+            self._print_disconnect_summary(removed, disconnect_reason)
 
-            summary = f"客户端{client_id}: 连接已断开（收到心跳 {heartbeat_count} 次）"
-            if client_name and client_name != f"客户端{client_id}":
-                summary = (
-                    f"客户端{client_id}({client_name}): 连接已断开（收到心跳 {heartbeat_count} 次）"
-                )
-            if client_type and client_type not in {"unknown", "live"}:
-                summary += f"，类型: {client_type}"
-            if disconnect_reason:
-                summary += f"，原因: {disconnect_reason}"
-            if not graceful:
-                summary += "，[red]未收到下线请求或未正常关闭[/red]"
-            self.console.print(summary)
-
-    async def _receive_messages(self, websocket: Any, client_id: int) -> None:
-        async for raw_message in websocket:
-            try:
-                data = json.loads(raw_message)
-            except json.JSONDecodeError:
+    async def _receive_messages(self, session: ClientSession) -> None:
+        websocket = session.websocket
+        client_id = session.client_id
+        async for raw_message in websocket.iter_text():
+            data = parse_envelope(raw_message)
+            if data is None:
                 self.console.print(f"客户端{client_id}: 收到无法解析的消息 {raw_message}")
                 continue
 
             action = data.get("action")
             payload = data.get("data", {})
             origin = data.get("from", {})
+            if not isinstance(payload, dict):
+                payload = {}
+            if not isinstance(origin, dict):
+                origin = {}
 
             match action:
                 case "hello":
                     client_name = self._handle_hello_event(origin, payload, client_id=client_id)
                     if client_name:
-                        self._client_names[client_id] = client_name
+                        self._connections.set_client_name(client_id, client_name)
                 case "close":
                     self.console.print(f"客户端{client_id}: 发出下线请求")
-                    self._graceful_disconnect_requests[client_id] = True
+                    session.graceful_disconnect_requested = True
                     await self._initiate_client_shutdown(websocket, client_id)
                     return
                 case "page_hidden":
@@ -250,9 +271,8 @@ class EchoServer:
                 case "echo_printing":
                     username = payload.get("username", "?")
                     content = payload.get("message", "") or "(空)"
-                    if content == "undefined":
-                        continue
-                    self.console.print(f"客户端{client_id}: 正在打印 {username}: {content}")
+                    if content != "undefined":
+                        self.console.print(f"客户端{client_id}: 正在打印 {username}: {content}")
                 case "echo_state_update":
                     state = payload.get("state", "unknown")
                     remaining = payload.get("messagesCount")
@@ -262,11 +282,11 @@ class EchoServer:
                     self.console.print(f"客户端{client_id}: 状态更新 -> {state}, 剩余消息 {remaining_str}")
                 case "error":
                     name = payload.get("name", "unknown")
-                    extras = {k: v for k, v in payload.items() if k != "name"}
+                    extras = {key: value for key, value in payload.items() if key != "name"}
                     extra_text = f"，详情: {extras}" if extras else ""
                     self.console.print(f"[red]客户端{client_id}: 报告错误 {name}{extra_text}[/red]")
                 case "websocket_heartbeat":
-                    self._heartbeat_counts[client_id] = self._heartbeat_counts.get(client_id, 0) + 1
+                    session.heartbeat_count += 1
                 case "live_display_update":
                     self._handle_live_display_update(client_id, payload)
                 case "error_unknown":
@@ -274,85 +294,70 @@ class EchoServer:
                 case _:
                     self.console.print(f"客户端{client_id}: 发送了未知事件，事件原文: {data}")
 
-    async def _pump_events(self, websocket: Any, client_id: int) -> None:
-        proceed = len(self._events)
+    async def _send_events(self, session: ClientSession) -> None:
+        websocket = session.websocket
+        client_id = session.client_id
         try:
             while True:
-                await asyncio.sleep(0.1)
-                if self._connection_is_closed(websocket):
+                event: OutgoingEvent = await session.queue.get()
+                if connection_is_closed(websocket):
                     return
-                if proceed >= len(self._events):
-                    continue
 
-                for event in self._events[proceed:]:
-                    payload = event.get("payload")
-                    if not isinstance(payload, str):
-                        self.console.print(
-                            f"[red]客户端{client_id}: 事件缺少可发送的 payload，已忽略[/red]"
-                        )
-                        continue
+                label = event.label or self._label_from_payload(event.payload)
+                if label:
+                    self.console.print(f"客户端{client_id}: 执行 {label}")
+                else:
+                    self.console.print(f"客户端{client_id}: 执行自定义 payload")
 
-                    target_types = event.get("target_types")
-                    if target_types:
-                        client_type = self._effective_client_type(client_id)
-                        if client_type not in set(target_types):
-                            continue
+                if event.description:
+                    self.console.print(f"客户端{client_id}: {event.description}")
+                elif label == "message_data":
+                    self.console.print(f"客户端{client_id}: 发送文字信息")
 
-                    label = event.get("label")
-                    if label is None:
-                        try:
-                            parsed_candidate = json.loads(payload)
-                        except json.JSONDecodeError:
-                            parsed_candidate = None
-                        if isinstance(parsed_candidate, dict):
-                            raw_label = parsed_candidate.get("action")
-                            if isinstance(raw_label, str) and raw_label:
-                                label = raw_label
+                try:
+                    await websocket.send(event.payload)
+                except (ConnectionResetError, RuntimeError):
+                    self.console.print(f"客户端{client_id}: 连接已优雅关闭，停止发送事件")
+                    return
+                finally:
+                    session.queue.task_done()
 
-                    if not isinstance(label, str) or not label:
-                        label = None
-
-                    description = event.get("description")
-                    if label:
-                        self.console.print(f"客户端{client_id}: 执行 {label}")
-                    else:
-                        self.console.print(f"客户端{client_id}: 执行自定义 payload")
-
-                    if description:
-                        self.console.print(f"客户端{client_id}: {description}")
-                    elif label == "message_data":
-                        self.console.print(f"客户端{client_id}: 发送文字信息")
-
-                    try:
-                        await websocket.send(payload)
-                    except websockets.exceptions.ConnectionClosedOK:
-                        self.console.print(
-                            f"客户端{client_id}: 连接已优雅关闭，停止发送事件"
-                        )
-                        return
-                    except websockets.exceptions.ConnectionClosed as exc:
-                        code_repr = getattr(exc, "code", "?")
-                        self.console.print(
-                            f"客户端{client_id}: 无法发送事件，连接已关闭 ({code_repr})"
-                        )
-                        return
-
-                    delay_value = event.get("delay")
-                    if isinstance(delay_value, (int, float)) and delay_value > 0:
-                        await asyncio.sleep(delay_value / 1000.0)
-                proceed = len(self._events)
+                if isinstance(event.delay, (int, float)) and event.delay > 0:
+                    await asyncio.sleep(event.delay / 1000.0)
         except asyncio.CancelledError:
             pass
 
+    @staticmethod
+    def _label_from_payload(payload: str) -> str | None:
+        try:
+            parsed_candidate = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed_candidate, dict):
+            return None
+        label = parsed_candidate.get("action")
+        return label if isinstance(label, str) and label else None
+
+    def _print_disconnect_summary(self, session: ClientSession, disconnect_reason: str | None) -> None:
+        client_id = session.client_id
+        summary = f"客户端{client_id}: 连接已断开（收到心跳 {session.heartbeat_count} 次）"
+        if session.name and session.name != f"客户端{client_id}":
+            summary = f"客户端{client_id}({session.name}): 连接已断开（收到心跳 {session.heartbeat_count} 次）"
+        if session.client_type not in {ClientType.UNKNOWN, ClientType.LIVE}:
+            summary += f"，类型: {session.client_type.value}"
+        if disconnect_reason:
+            summary += f"，原因: {disconnect_reason}"
+        if not session.graceful_disconnect_requested:
+            summary += "，[red]未收到下线请求或未正常关闭[/red]"
+        self.console.print(summary)
+
     async def _initiate_client_shutdown(self, websocket: Any, client_id: int) -> None:
-        if self._connection_is_closed(websocket):
+        if connection_is_closed(websocket):
             return
         try:
-            await websocket.close(code=1000, reason="Client requested shutdown")
-        except websockets.exceptions.ConnectionClosed:
-            self.console.print(
-                f"客户端{client_id}: 连接关闭过程中出现异常，可能已被客户端终止"
-            )
+            await websocket.close(code=WSCloseCode.OK, reason="Client requested shutdown")
+        except Exception:
+            self.console.print(f"客户端{client_id}: 连接关闭过程中出现异常，可能已被客户端终止")
 
     async def _cancel_input_task(self) -> None:
         task = self._input_task
@@ -367,46 +372,7 @@ class EchoServer:
         self._input_task = None
 
     async def _close_all_clients(self) -> None:
-        if not self._connections:
-            return
-
-        async def _close_single(websocket: Any) -> None:
-            if self._connection_is_closed(websocket):
-                return
-            try:
-                await websocket.close(code=1001, reason="Server shutdown")
-            except websockets.exceptions.ConnectionClosed:
-                pass
-            except Exception:
-                return
-            wait_closed = getattr(websocket, "wait_closed", None)
-            awaitable: Awaitable[Any] | None = None
-            if callable(wait_closed):
-                closer = wait_closed()
-                if asyncio.isfuture(closer):
-                    awaitable = closer
-                elif inspect.isawaitable(closer):
-                    awaitable = asyncio.ensure_future(closer)
-            if awaitable is not None:
-                try:
-                    await asyncio.wait_for(awaitable, timeout=2)
-                    return
-                except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
-                    pass
-                except Exception:
-                    pass
-            transport = getattr(websocket, "transport", None)
-            if transport is not None:
-                transport.close()
-                abort = getattr(transport, "abort", None)
-                if callable(abort):
-                    abort()
-
-        await asyncio.gather(
-            *[_close_single(conn) for conn in list(self._connections)],
-            return_exceptions=True,
-        )
-        self._connections.clear()
+        await self._connections.close_all()
 
     async def _run_input_loop(self) -> None:
         while True:
@@ -430,7 +396,6 @@ class EchoServer:
 
     async def _prompt_command(self, prompt: str) -> str:
         """Read a line from stdin without relying on prompt_toolkit."""
-
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.console.input, prompt)
 
@@ -462,11 +427,7 @@ class EchoServer:
         self.console.print("[red]这个命令怕是不存在吧……[/red]")
         suggestions = catalog.suggest(action, prefix) if catalog else []
         if suggestions:
-            self.console.print(
-                "[blue]你是想输入 {} 吗？[/blue]".format(
-                    "、".join(suggestions)
-                )
-            )
+            self.console.print("[blue]你是想输入 {} 吗？[/blue]".format("、".join(suggestions)))
         else:
             self.console.print("[blue]tips: 如果你想要发消息，请不要用 '/' 开头！[/blue]")
         self.console.print(f"[blue]输入 {prefix}help 查看命令列表。[/blue]")
@@ -476,17 +437,11 @@ class EchoServer:
         arg_count = len(args)
         if arg_count < spec.min_args:
             expected = "至少" if spec.max_args is None else str(spec.min_args)
-            self.console.print(
-                f"[red]命令缺少参数，需要 {expected} 个参数。[/red]"
-            )
+            self.console.print(f"[red]命令缺少参数，需要 {expected} 个参数。[/red]")
             return True
-
         if spec.max_args is not None and arg_count > spec.max_args:
-            self.console.print(
-                f"[red]命令参数过多，仅支持 {spec.max_args} 个参数。[/red]"
-            )
+            self.console.print(f"[red]命令参数过多，仅支持 {spec.max_args} 个参数。[/red]")
             return True
-
         return spec.handler(args)
 
     def _cmd_rename(self, args: list[str]) -> bool:
@@ -504,65 +459,44 @@ class EchoServer:
         return True
 
     def _cmd_reload(self, args: list[str]) -> bool:
-        """Reload configuration file - hot reload (no server restart) or warm reload (with restart)."""
         mode = args[0].lower() if args else "hot"
-
         if mode not in {"hot", "warm"}:
             self.console.print("[red]无效的重载模式，请使用 'hot' 或 'warm'。[/red]")
             return True
-
         if mode == "warm":
             return self._cmd_reload_warm()
 
-        # Hot reload: reload config without restarting server
         old_config = self.config.copy()
         self.config = load_config(self.console)
-
-        # Sync runtime state based on new config
         self._sync_sigint_guard()
 
-        # Report what changed
-        changed_keys = []
-        for key, value in self.config.items():
-            if key not in old_config or old_config[key] != value:
-                changed_keys.append(key)
-
+        changed_keys = [key for key, value in self.config.items() if old_config.get(key) != value]
         if changed_keys:
             self.console.print(f"[green]配置已重新加载（热重载），更新了以下配置项: {', '.join(changed_keys)}[/green]")
         else:
             self.console.print("[green]配置已重新加载（热重载），无变更。[/green]")
-
         return True
 
     def _cmd_reload_warm(self) -> bool:
-        """Reload configuration and restart WebSocket server."""
         self.console.print("[yellow]正在执行温重载，将重启 WebSocket 服务器...[/yellow]")
-
-        # Store current config before reloading
         old_host = self.config.get("host")
         old_port = self.config.get("port")
-
-        # Reload config
         self.config = load_config(self.console)
-
-        # Check if host/port changed
         new_host = self.config.get("host")
         new_port = self.config.get("port")
 
         if old_host != new_host or old_port != new_port:
-            self.console.print(
-                f"[yellow]检测到服务器地址变更: {old_host}:{old_port} -> {new_host}:{new_port}[/yellow]"
-            )
+            self.console.print(f"[yellow]检测到服务器地址变更: {old_host}:{old_port} -> {new_host}:{new_port}[/yellow]")
 
-        # Sync runtime state
         self._sync_sigint_guard()
-
         self.console.print("[green]配置已重新加载（温重载）。[/green]")
         self.console.print("[blue]提示: 温重载会断开所有客户端连接，服务器将立即重启。[/blue]")
 
-        # Schedule an async task to restart the server
-        asyncio.create_task(self._restart_server())
-
+        try:
+            asyncio.get_running_loop().create_task(self._restart_server())
+        except RuntimeError:
+            self._restart_requested = True
+            self.console.print("[yellow]当前不在事件循环中，已记录重启请求。[/yellow]")
         return True
 
     def _cmd_set_print_speed(self, args: list[str]) -> bool:
@@ -571,11 +505,9 @@ class EchoServer:
         except ValueError:
             self.console.print("[red]打印速度需要输入正整数，单位毫秒。[/red]")
             return True
-
         if value <= 0:
             self.console.print("[red]打印速度需要输入正整数，单位毫秒。[/red]")
             return True
-
         self.config["print_speed"] = value
         self._persist_config()
         self.console.print(f"[green]打印速度已设置为 {value}ms[/green]")
@@ -584,9 +516,7 @@ class EchoServer:
     def _cmd_toggle_typewriting(self, _args: list[str]) -> bool:
         self.config["typewriting"] = not self.config.get("typewriting", False)
         self._persist_config()
-        self.console.print(
-            f"[green]Typewriting 状态已经变更为 {self.config['typewriting']}[/green]"
-        )
+        self.console.print(f"[green]Typewriting 状态已经变更为 {self.config['typewriting']}[/green]")
         return True
 
     def _cmd_toggle_typewriting_scheme(self, _args: list[str]) -> bool:
@@ -594,17 +524,13 @@ class EchoServer:
         next_scheme = "zhuyin" if current == "pinyin" else "pinyin"
         self.config["typewriting_scheme"] = next_scheme
         self._persist_config()
-        self.console.print(
-            f"[green]Typewriting 模式已切换为 {next_scheme}[/green]"
-        )
+        self.console.print(f"[green]Typewriting 模式已切换为 {next_scheme}[/green]")
         return True
 
     def _cmd_toggle_autopause(self, _args: list[str]) -> bool:
         self.config["autopause"] = not self.config.get("autopause", False)
         self._persist_config()
-        self.console.print(
-            f"[green]autopause 状态已经变更为 {self.config['autopause']}[/green]"
-        )
+        self.console.print(f"[green]autopause 状态已经变更为 {self.config['autopause']}[/green]")
         return True
 
     def _cmd_suffix(self, args: list[str]) -> bool:
@@ -626,14 +552,13 @@ class EchoServer:
             self.console.print(f"[green]自动结尾字符功能已{state_label}[/green]")
             return True
 
-        suffix_value = option
-        if not suffix_value:
+        if not option:
             self.console.print("[red]结尾字符不能为空。[/red]")
             return True
 
-        self.config["auto_suffix_value"] = suffix_value
+        self.config["auto_suffix_value"] = option
         self._persist_config()
-        self.console.print(f"[green]自动结尾字符已设置为 {suffix_value}[/green]")
+        self.console.print(f"[green]自动结尾字符已设置为 {option}[/green]")
         return True
 
     def _cmd_quote(self, args: list[str]) -> bool:
@@ -667,15 +592,12 @@ class EchoServer:
             if left is None and right is None and stored_left and stored_right:
                 left = stored_left
                 right = stored_right
-
             if left is None or right is None:
                 self.console.print("[red]custom 模式需要同时传入左右引号，例如: /quote custom 『 』[/red]")
                 return True
-
             if not left.strip() or not right.strip():
                 self.console.print("[red]自定义引号左右部分不能为空。[/red]")
                 return True
-
             self.config["quote_style"] = "custom"
             self.config["quote_custom_left"] = left
             self.config["quote_custom_right"] = right
@@ -690,9 +612,7 @@ class EchoServer:
         if not args:
             self.config["auto_parentheses"] = not self.config.get("auto_parentheses", False)
             self._persist_config()
-            self.console.print(
-                f"[green]圆括号包装状态已经变更为 {self.config['auto_parentheses']}[/green]"
-            )
+            self.console.print(f"[green]圆括号包装状态已经变更为 {self.config['auto_parentheses']}[/green]")
             return True
 
         option = args[0].lower()
@@ -700,24 +620,18 @@ class EchoServer:
             self._parentheses_once = True
             self.console.print("[green]下一条消息将附加圆括号。[/green]")
             return True
-
         if option in {"on", "off"}:
             self.config["auto_parentheses"] = option == "on"
             self._persist_config()
-            self.console.print(
-                f"[green]圆括号包装状态已经设置为 {self.config['auto_parentheses']}[/green]"
-            )
+            self.console.print(f"[green]圆括号包装状态已经设置为 {self.config['auto_parentheses']}[/green]")
             return True
-
         self.console.print("[red]参数无效，可使用 on/off 或 once。[/red]")
         return True
 
     def _cmd_toggle_username_brackets(self, _args: list[str]) -> bool:
         self.config["username_brackets"] = not self.config.get("username_brackets", False)
         self._persist_config()
-        self.console.print(
-            f"[green]用户名【】包裹状态: {self.config['username_brackets']}[/green]"
-        )
+        self.console.print(f"[green]用户名【】包裹状态: {self.config['username_brackets']}[/green]")
         return True
 
     def _cmd_toggle_interrupt_guard(self, args: list[str]) -> bool:
@@ -734,68 +648,64 @@ class EchoServer:
         self._persist_config()
         self._sync_sigint_guard()
         state_label = "开启" if new_state else "关闭"
-        self.console.print(
-            f"[green]Ctrl+C 退出保护当前状态: {state_label}[/green]"
-        )
+        self.console.print(f"[green]Ctrl+C 退出保护当前状态: {state_label}[/green]")
         return True
 
     def _cmd_skip(self, args: list[str]) -> bool:
         if args:
             self.console.print("[yellow]/skip 不需要参数，已忽略额外输入。[/yellow]")
 
-        skip_mode_value = self.config.get("skip_mode", "blank_text")
-        skip_mode = str(skip_mode_value).lower() if skip_mode_value is not None else "blank_text"
-
-        if skip_mode == "hide_display":
-            # Optional behavior: send action to make live hide
-            payload = json.dumps({"action": "set_live_display", "data": {"display": False}}, ensure_ascii=False)
+        skip_mode = normalize_skip_mode(self.config.get("skip_mode", "blank_text"))
+        if skip_mode is SkipMode.ECHO_NEXT:
             self._enqueue_payload(
-                payload,
+                BroadcastEnvelope("echo_next").to_json(),
+                label="echo_next",
+                description="触发 echo_next",
+            )
+            self.console.print("[green]已发送 echo_next 指令（由 /skip 触发）[/green]")
+            return True
+
+        if skip_mode is SkipMode.HIDE_DISPLAY:
+            self._enqueue_payload(
+                BroadcastEnvelope("set_live_display", {"display": False}).to_json(),
                 label="set_live_display",
                 description="隐藏实时展示",
-                target_types={"live"},
+                target_types={ClientType.LIVE},
             )
             self.console.print("[green]已发送隐藏实时展示指令（由 /skip 触发）[/green]")
-        else:  # blank_text (default)
-            # Default behavior: push blank text to live group
+        else:
             username_value = format_username(self.config)
-            payload = json.dumps(
+            payload = BroadcastEnvelope(
+                "message_data",
                 {
-                    "action": "message_data",
-                    "data": {
-                        "username": username_value,
-                        "messages": [{"message": [{"text": ""}]}],
-                    },
+                    "username": username_value,
+                    "messages": [{"message": [{"text": ""}]}],
                 },
-                ensure_ascii=False
-            )
+            ).to_json()
             self._enqueue_payload(
                 payload,
                 label="message_data",
                 description="发送空白文本",
-                target_types={"live"},
+                target_types={ClientType.LIVE},
             )
             self.console.print("[green]已向实时展示发送空白文本（由 /skip 触发）[/green]")
 
         self._enqueue_echo_next_for_history()
-
         return True
 
     def _enqueue_echo_next_for_history(self) -> None:
-        payload = json.dumps({"action": "echo_next", "data": {}}, ensure_ascii=False)
         self._enqueue_payload(
-            payload,
+            BroadcastEnvelope("echo_next").to_json(),
             label="echo_next",
             description="触发 echo_next（历史客户端）",
-            target_types={"history"},
+            target_types={ClientType.HISTORY},
         )
         self.console.print("[green]已向历史客户端发送 echo_next 指令（由 /skip 触发）[/green]")
 
     def _cmd_clear(self, args: list[str]) -> bool:
         if args:
             self.console.print("[yellow]/clear 不需要参数，已忽略额外输入。[/yellow]")
-        payload = json.dumps({"action": "history_clear", "data": {}}, ensure_ascii=False)
-        self._enqueue_payload(payload, label="history_clear", description="清空历史记录")
+        self._enqueue_payload(BroadcastEnvelope("history_clear").to_json(), label="history_clear", description="清空历史记录")
         self.console.print("[green]已发送清空历史记录指令（由 /clear 触发）[/green]")
         return True
 
@@ -813,13 +723,10 @@ class EchoServer:
                 self.console.print("[red]没有找到这个命令。[/red]")
                 suggestions = catalog.suggest(query, prefix)
                 if suggestions:
-                    self.console.print(
-                        "[blue]你是想输入 {} 吗？[/blue]".format("、".join(suggestions))
-                    )
+                    self.console.print("[blue]你是想输入 {} 吗？[/blue]".format("、".join(suggestions)))
                 else:
                     self.console.print(f"[blue]输入 {prefix}help 查看全部命令。[/blue]")
                 return True
-
             self._print_command_details(spec, prefix)
             return True
 
@@ -829,7 +736,6 @@ class EchoServer:
         table.add_column("当前值")
         table.add_column("参数")
         table.add_column("说明", overflow="fold")
-
         for spec in catalog.specs:
             table.add_row(
                 f"{prefix}{spec.name}",
@@ -838,7 +744,6 @@ class EchoServer:
                 argument_hint(spec),
                 spec.description or "-",
             )
-
         self.console.print(table)
         return True
 
@@ -853,43 +758,33 @@ class EchoServer:
             usage = f"{usage} <...>"
 
         self.console.print(f"[cyan]{usage}[/cyan] - {spec.description or '无描述'}")
-
         alias_text = format_aliases(spec.aliases, prefix)
         if alias_text != "-":
             self.console.print(f"[white]常用别名[/white]: {alias_text}")
-
         self.console.print(f"[white]参数[/white]: {argument_hint(spec)}")
         status = command_status(self, spec)
         if status != "-":
             self.console.print(f"[white]当前值[/white]: {status}")
 
     @staticmethod
-    def _literal_message_from_command(command: str, prefix: str) -> Optional[str]:
-        if not prefix:
+    def _literal_message_from_command(command: str, prefix: str) -> str | None:
+        if not prefix or not command.startswith(prefix * 2):
             return None
-        if not command.startswith(prefix * 2):
-            return None
-
         repeats = 0
         step = len(prefix)
         index = 0
         while command.startswith(prefix, index):
             repeats += 1
             index += step
-
         remainder = command[index:]
         return prefix * (repeats - 1) + remainder
 
     def _execute_source_file(self, path: str) -> None:
-        from pathlib import Path
-
         file_path = Path(path).expanduser()
         if not file_path.is_absolute():
             file_path = Path.cwd() / file_path
 
-        self.console.print(
-            f"[blue]从文件 {file_path} 中载入内容（文件中的每一行会被作为独立的部分输入到控制台里！）[/]"
-        )
+        self.console.print(f"[blue]从文件 {file_path} 中载入内容（文件中的每一行会被作为独立的部分输入到控制台里！）[/]")
         try:
             with file_path.open("r", encoding="utf-8") as file:
                 for line in file:
@@ -911,11 +806,9 @@ class EchoServer:
         left_quote, right_quote = self._quote_pair()
         if left_quote and right_quote and not self._is_wrapped(result, left_quote, right_quote):
             result = f"{left_quote}{result}{right_quote}"
-
         apply_parentheses = self.config.get("auto_parentheses", False) or self._parentheses_once
         if apply_parentheses and not self._is_wrapped(result, "(", ")"):
             result = f"({result})"
-
         self._parentheses_once = False
         return result
 
@@ -933,7 +826,7 @@ class EchoServer:
             if left and right:
                 return f"custom（{left}{right}）"
             return "custom（未配置）"
-        return "en \"\""
+        return 'en ""'
 
     def _quote_pair(self) -> tuple[str, str]:
         style = str(self.config.get("quote_style", "en") or "en").lower()
@@ -955,22 +848,15 @@ class EchoServer:
             return text
         if not self.config.get("auto_suffix", True):
             return text
-
         suffix = str(self.config.get("auto_suffix_value", "喵"))
         if not suffix:
             return text
-
         trimmed = text.rstrip()
-        if not trimmed:
+        if not trimmed or trimmed.endswith(suffix):
             return text
-
-        if trimmed.endswith(suffix):
+        if not any(self._is_semantic_character(char) for char in trimmed):
             return text
-
-        if not any(self._is_semantic_character(ch) for ch in trimmed):
-            return text
-
-        trailing = text[len(trimmed):]
+        trailing = text[len(trimmed) :]
         return f"{trimmed}{suffix}{trailing}"
 
     @staticmethod
@@ -987,35 +873,23 @@ class EchoServer:
         delay: int | float | None = None,
         label: str | None = None,
         description: str | None = None,
-        target_types: Iterable[str] | None = None,
+        target_types: Iterable[str | ClientType] | None = None,
     ) -> None:
-        event: dict[str, Any] = {"payload": payload}
-        if label:
-            event["label"] = label
-        if description:
-            event["description"] = description
-        if isinstance(delay, (int, float)) and delay > 0:
-            event["delay"] = delay
-        if target_types is not None:
-            filtered = {item for item in target_types if isinstance(item, str) and item}
-            if filtered:
-                normalized = {self._normalize_client_type(item) for item in filtered}
-                normalized.discard("unknown")
-                if normalized:
-                    event["target_types"] = tuple(sorted(normalized))
-        self._events.append(event)
+        event = OutgoingEvent(
+            payload=payload,
+            delay=delay if isinstance(delay, (int, float)) and delay > 0 else None,
+            label=label,
+            description=description,
+            target_types=normalize_target_types(target_types),
+        )
+        self._connections.enqueue(event)
 
     def _enqueue_message(self, text: str) -> None:
         syntax = parse_message(text)
         syntax = apply_autopause(self.config, syntax)
         payload = render(self.config, syntax)
         delay = get_delay(self.config, syntax)
-        self._enqueue_payload(
-            payload,
-            delay=delay,
-            label="message_data",
-            description="发送文字信息",
-        )
+        self._enqueue_payload(payload, delay=delay, label="message_data", description="发送文字信息")
 
     def _send_literal_message(self, text: str) -> None:
         enriched = self._apply_auto_suffix(text)
@@ -1024,25 +898,21 @@ class EchoServer:
         self._enqueue_message(decorated)
 
     def _connection_is_closed(self, websocket: Any) -> bool:
-        closed_attr = getattr(websocket, "closed", None)
-        if isinstance(closed_attr, bool):
-            return closed_attr
-        return False
+        return connection_is_closed(websocket)
 
     def _handle_live_display_update(self, client_id: int, payload: dict[str, Any]) -> None:
         display_state = bool(payload.get("display"))
-        previous = self._live_display_visibility.get(client_id)
-        self._live_display_visibility[client_id] = display_state
+        session = self._connections.get(client_id)
+        previous = session.live_display_visible if session is not None else None
+        if session is not None:
+            session.live_display_visible = display_state
 
         state_label = "开启" if display_state else "关闭"
         extra = "，状态未变化" if previous is not None and previous == display_state else ""
         vanish_hint = "（自动消隐）" if not display_state else ""
-        self.console.print(
-            f"客户端{client_id}: 实时展示 {state_label}{vanish_hint}{extra}"
-        )
+        self.console.print(f"客户端{client_id}: 实时展示 {state_label}{vanish_hint}{extra}")
 
     def _handle_error_unknown(self, client_id: int, payload: dict[str, Any]) -> None:
-        """Handle error_unknown events from the client with prettier formatting."""
         message = payload.get("message", "未知错误")
         source = payload.get("source", "")
         line = payload.get("line", 0)
@@ -1050,10 +920,8 @@ class EchoServer:
 
         error_parts = [f"[red]客户端{client_id}: 客户端报告错误[/red]"]
         error_parts.append(f"  [yellow]消息:[/yellow] {message}")
-
-        if source and source != "null" and source != "undefined":
+        if source and source not in {"null", "undefined"}:
             error_parts.append(f"  [yellow]来源:[/yellow] {source}")
-
         if line > 0 or col > 0:
             location = []
             if line > 0:
@@ -1061,36 +929,7 @@ class EchoServer:
             if col > 0:
                 location.append(f"列 {col}")
             error_parts.append(f"  [yellow]位置:[/yellow] {', '.join(location)}")
-
         self.console.print("\n".join(error_parts))
-
-    def _add_client_to_list(self, client_id: int, client_type: str) -> None:
-        """Add a client to the appropriate list based on its type."""
-        # Remove from all lists first to avoid duplicates
-        self._remove_client_from_lists(client_id)
-
-        # Add to the appropriate list
-        normalized = self._normalize_client_type(client_type)
-        if normalized == "unknown":
-            normalized = "live"
-        if normalized == "history":
-            if client_id not in self._history_clients:
-                self._history_clients.append(client_id)
-        elif normalized == "live":
-            if client_id not in self._live_clients:
-                self._live_clients.append(client_id)
-        elif normalized == "server":
-            if client_id not in self._editor_clients:
-                self._editor_clients.append(client_id)
-
-    def _remove_client_from_lists(self, client_id: int) -> None:
-        """Remove a client from all client lists."""
-        if client_id in self._history_clients:
-            self._history_clients.remove(client_id)
-        if client_id in self._live_clients:
-            self._live_clients.remove(client_id)
-        if client_id in self._editor_clients:
-            self._editor_clients.remove(client_id)
 
     def _handle_hello_event(
         self,
@@ -1098,9 +937,7 @@ class EchoServer:
         payload: dict[str, Any],
         *,
         client_id: int | None = None,
-    ) -> Optional[str]:
-        """Log hello events consistently across websocket sources."""
-
+    ) -> str | None:
         client_name = origin.get("name") or origin.get("uuid")
         client_type = origin.get("type")
         hidden = payload.get("hidden")
@@ -1117,47 +954,29 @@ class EchoServer:
             status_bits.append("定向模式")
 
         status_text = f"，状态: {', '.join(status_bits)}" if status_bits else ""
-
         if client_id is not None:
             label = f"客户端{client_id}"
             if client_name and client_name != label:
                 label = f"{label}({client_name})"
             if isinstance(client_type, str) and client_type:
-                normalized_type = self._normalize_client_type(client_type)
-                effective_type = normalized_type if normalized_type != "unknown" else "live"
-                self._client_types[client_id] = effective_type
-                # Add client to appropriate list based on type
-                self._add_client_to_list(client_id, effective_type)
+                self._connections.set_client_type(client_id, client_type)
                 self._report_client_groups()
             self.console.print(f"{label}: 上线{status_text}")
-
-        return client_name
+        return str(client_name) if client_name else None
 
     def _normalize_client_type(self, client_type: Any) -> str:
-        if not isinstance(client_type, str):
-            return "unknown"
-        value = client_type.strip().lower()
-        if value in {"history", "live", "server"}:
-            return value
-        return "unknown"
+        return normalize_client_type(client_type).value
 
     def _effective_client_type(self, client_id: int) -> str:
-        raw_type = self._client_types.get(client_id)
-        normalized = self._normalize_client_type(raw_type)
-        if normalized == "unknown":
-            return "live"
-        return normalized
+        session = self._connections.get(client_id)
+        if session is None:
+            return ClientType.LIVE.value
+        return effective_client_type(session.client_type).value
 
     def _report_client_groups(self) -> None:
-        segments: list[str] = []
-        if self._live_clients:
-            segments.append("live: " + ",".join(str(cid) for cid in self._live_clients))
-        if self._history_clients:
-            segments.append("history: " + ",".join(str(cid) for cid in self._history_clients))
-        if self._editor_clients:
-            segments.append("server: " + ",".join(str(cid) for cid in self._editor_clients))
-        if segments:
-            self.console.print("[dim]客户端分组 -> " + " | ".join(segments) + "[/dim]")
+        summary = self._connections.group_summary()
+        if summary:
+            self.console.print("[dim]客户端分组 -> " + summary + "[/dim]")
 
     def _sync_sigint_guard(self) -> None:
         if self.config.get("inhibit_ctrl_c", True):
@@ -1205,18 +1024,14 @@ class EchoServer:
         raise KeyboardInterrupt
 
     def _warn_ctrl_c_guard(self) -> None:
-        self.console.print(
-            "[yellow]检测到 Ctrl+C，但当前启用了退出保护；请使用 /nocc 关闭保护或使用 /quit 正常退出。[/yellow]"
-        )
+        self.console.print("[yellow]检测到 Ctrl+C，但当前启用了退出保护；请使用 /nocc 关闭保护或使用 /quit 正常退出。[/yellow]")
 
     def _handle_keyboard_interrupt(self) -> bool:
         if not self.config.get("inhibit_ctrl_c", True):
             return False
-
         if self._sigint_suppressed:
             self._sigint_suppressed = False
             return True
-
         self._warn_ctrl_c_guard()
         return True
 
