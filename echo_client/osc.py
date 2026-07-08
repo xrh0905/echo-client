@@ -3,15 +3,13 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from pythonosc.udp_client import SimpleUDPClient
 
 _logger = logging.getLogger(__name__)
 
 
 def _get_simple_udp_client(host: str, port: int) -> Any:
-    """Lazily import and create a SimpleUDPClient for the given address."""
-    from pythonosc.udp_client import (  # pylint: disable=import-outside-toplevel
-        SimpleUDPClient,
-    )
+    """Create a SimpleUDPClient for the given address."""
 
     return SimpleUDPClient(host, port)
 

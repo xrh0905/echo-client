@@ -4,3 +4,4 @@ pypinyin>=0.55.0
 PyYAML>=6.0.1
 jieba>=0.42.1
 markdown-it-py>=3.0.0
+python-osc>=1.10.2
