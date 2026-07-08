@@ -38,7 +38,7 @@
 
    ```powershell
    python -m pip install --upgrade pip
-   pip install -r requirements.txt
+   pip install .
    python -m echo_client.cli
    ```
 
@@ -47,6 +47,8 @@
 ## 🔌 与 Echo-live 对接
 
 - Echo-live 的 WebSocket 客户端连接到 `ws://<host>:<port>`（默认 `127.0.0.1:3000`）。
+- 服务器基于 `aiohttp`，兼容根路径 `/`，并额外提供 `/ws` 作为 WebSocket 别名。
+- 可通过 `http://<host>:<port>/healthz` 检查服务健康状态和当前连接数量。
 - 建议在 OBS 中刷新浏览器源以触发连接。
 - 连接后，终端会显示客户端 ID、显示名称、心跳次数、实时展示状态等事件。
 
@@ -149,7 +151,7 @@ echo-client 同时支持两套叠加格式：
 ```powershell
 python -m pip install --upgrade pip
 pip install -r pyrequirements.txt
-python -m nuitka --standalone --onefile --include-package-data=pypinyin --windows-icon-from-ico=realme_sheep_triangle.ico --assume-yes-for-downloads --output-filename=echo-client.exe --output-dir=dist --remove-output main.py
+python -m nuitka --mode=onefile --include-package=aiohttp --include-package-data=pypinyin --include-package-data=jieba --windows-icon-from-ico=realme_sheep_triangle.ico --assume-yes-for-downloads --output-filename=echo-client.exe --output-dir=dist --remove-output main.py
 ```
 
 构建完成的单文件位于 `dist/echo-client.exe`。可执行文件会在自身目录创建/更新 `config.yaml`，无需额外携带配置。
@@ -160,11 +162,14 @@ python -m nuitka --standalone --onefile --include-package-data=pypinyin --window
 git clone https://github.com/xrh0905/echo-client.git
 cd echo-client
 python -m pip install --upgrade pip
-pip install -r pyrequirements.txt
+pip install . pytest
 python -m echo_client.cli
 ```
 
-- 代码格式建议使用 `ruff`/`pylint` 等工具（仓库默认提供 `pylint`）。
+- 需要 Python 3.12 或更高版本。
+- 运行测试：`python -m pytest`。
+- Echo-Live 协议参照可克隆到 `.reference/Echo-Live-Doc`，该目录已被 `.gitignore` 忽略。
+- 代码格式建议使用 `black`/`isort`/`pylint` 等工具（仓库默认提供 pre-commit 配置）。
 - 提交 PR 或 issue 前请说明使用场景，尤其是 Echo-live 与 echo-client 的版本信息。
 
 ## ❓ 常见问题

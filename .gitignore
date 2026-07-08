@@ -1,6 +1,9 @@
 # direnv cache
 .direnv
 
+# local protocol reference checkout
+.reference/
+
 # python cache
 __pycache__
 *.pyc
