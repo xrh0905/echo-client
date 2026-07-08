@@ -31,6 +31,7 @@ from .message import (
     parse_message,
     render,
 )
+from .osc import extract_plain_text, send_vrchat_chatbox
 from .protocol import (
     PING_PAYLOAD,
     BroadcastEnvelope,
@@ -457,6 +458,68 @@ class EchoServer:
     def _cmd_source(self, args: list[str]) -> bool:
         self._execute_source_file(args[0])
         return True
+
+    def _cmd_osc(self, args: list[str]) -> bool:
+        if not args:
+            self.config["osc_enabled"] = False
+            self._persist_config()
+            self.console.print("[green]OSC 同步已关闭[/green]")
+            return True
+
+        option = args[0].strip().lower()
+        if option in {"off", "disable", "false", "0"}:
+            self.config["osc_enabled"] = False
+            self._persist_config()
+            self.console.print("[green]OSC 同步已关闭[/green]")
+            return True
+
+        if option in {"on", "enable", "true", "1"}:
+            self.config["osc_address"] = "127.0.0.1:9000"
+            self.config["osc_enabled"] = True
+            self._persist_config()
+            self.console.print("[green]OSC 同步已开启（127.0.0.1:9000）[/green]")
+            return True
+
+        address = args[0].strip()
+        if not self._validate_osc_address(address):
+            self.console.print("[red]无效的 OSC 地址格式，请使用 host:port 格式（如 127.0.0.1:9000）。[/red]")
+            return True
+
+        self.config["osc_address"] = address
+        self.config["osc_enabled"] = True
+        self._persist_config()
+        self.console.print(f"[green]OSC 同步已开启（{address}）[/green]")
+        return True
+
+    @staticmethod
+    def _validate_osc_address(address: str) -> bool:
+        if ":" not in address:
+            return False
+        host_part, _, port_part = address.rpartition(":")
+        if not host_part or not port_part:
+            return False
+        try:
+            port = int(port_part)
+        except ValueError:
+            return False
+        return 1 <= port <= 65535
+
+    def _send_osc_if_enabled(self, text: str) -> None:
+        if not self.config.get("osc_enabled", False):
+            return
+        address = str(self.config.get("osc_address", "127.0.0.1:9000"))
+        if ":" not in address:
+            return
+        host_part, _, port_part = address.rpartition(":")
+        try:
+            port = int(port_part)
+        except ValueError:
+            return
+        parsed = parse_message(text)
+        plain = extract_plain_text(parsed)
+        if not plain:
+            return
+        send_vrchat_chatbox(host_part, port, plain)
 
     def _cmd_reload(self, args: list[str]) -> bool:
         mode = args[0].lower() if args else "hot"
@@ -896,6 +959,7 @@ class EchoServer:
         decorated = self._decorate_outgoing_text(enriched)
         self.console.print(f"发送文字消息: {decorated}")
         self._enqueue_message(decorated)
+        self._send_osc_if_enabled(decorated)
 
     def _connection_is_closed(self, websocket: Any) -> bool:
         return connection_is_closed(websocket)

@@ -31,6 +31,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "auto_suffix": False,
     "auto_suffix_value": "喵",
     "skip_mode": "blank_text",
+    "osc_enabled": False,
+    "osc_address": "127.0.0.1:9000",
 }
 
 QUOTE_STYLES = {"en", "cn", "jp", "custom", "none"}
@@ -44,6 +46,7 @@ _BOOL_KEYS = {
     "username_brackets",
     "auto_suffix",
     "inhibit_ctrl_c",
+    "osc_enabled",
 }
 
 _STRING_KEYS = {
@@ -57,6 +60,7 @@ _STRING_KEYS = {
     "quote_custom_right",
     "auto_suffix_value",
     "skip_mode",
+    "osc_address",
 }
 
 _POSITIVE_INT_KEYS = {

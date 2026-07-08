@@ -136,6 +136,12 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
     def quote_style_status(srv: "EchoServer") -> str:
         return srv._quote_style_label()
 
+    def osc_status(srv: "EchoServer") -> str:
+        if not srv.config.get("osc_enabled", False):
+            return "关闭"
+        addr = str(srv.config.get("osc_address", "127.0.0.1:9000"))
+        return f"开启（{addr}）"
+
     return (
         CommandSpec(
             name="help",
@@ -268,6 +274,14 @@ def build_command_specs(server: "EchoServer") -> tuple[CommandSpec, ...]:
             min_args=0,
             max_args=1,
             description="重新加载配置文件，默认热重载（不重启服务器），使用 'warm' 参数进行温重载（重启服务器）",
+        ),
+        CommandSpec(
+            name="osc",
+            handler=server._cmd_osc,
+            min_args=0,
+            max_args=None,
+            description="配置 VRChat OSC 同步（留空或off=关闭，on=默认地址开启，其他=自定义地址开启）",
+            status_getter=osc_status,
         ),
     )
 
